@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+# bot.py
+"""
+Telegram FAQ Bot — Main runtime with in-memory Q&A cache and matching.
+"""
+from __future__ import annotations
+
+import os
+import logging
+import time
+from typing import List, Tuple, Optional, Dict, Any
+
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+)
+
+# local modules
+from normalize import normalize_ar
+import db  # centralized DB service (connect, init_db)
+from commands import register_command_handlers, is_admin_private  # admin flows
+from cache import QACache
+from match import find_best_match  # returns dict with score, answer, id, ...
+
+from dotenv import load_dotenv
+
+# --- Logging ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --- Configuration from env ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+DB_PATH = os.getenv("DB_PATH")
+
+MENTION_THRESHOLD = int(os.getenv("MENTION_THRESHOLD", "70"))
+NORMAL_THRESHOLD = int(os.getenv("NORMAL_THRESHOLD", "80"))
+APOLOGY_MSG = os.getenv("APOLOGY_MSG", "عذراً، لا أملك إجابة على هذا السؤال. يمكنك التواصل مع الدعم.")
+
+# QA cache configuration
+QA_CACHE_TTL = int(os.getenv("QA_CACHE_TTL", "30"))
+QA_CACHE_AUTO_REFRESH = os.getenv("QA_CACHE_AUTO_REFRESH", "false").lower() in ("1", "true", "yes")
+QA_CACHE_AUTO_INTERVAL = int(os.getenv("QA_CACHE_AUTO_INTERVAL", "120"))
+
+
+# --- Mention detection ---
+def is_mentioned(update: Update, bot_username: Optional[str]) -> bool:
+    """
+    Return True if:
+      - chat is private (we treat private chats as explicit request for response),
+      - OR the bot is mentioned via @username in the text,
+      - OR message.entities contains a mention/text_mention.
+    """
+    if update.effective_message is None:
+        return False
+
+    # treat private chat as explicit (so bot always answers or apologizes)
+    chat = update.effective_chat
+    if chat and chat.type == "private":
+        return True
+
+    text = update.effective_message.text or ""
+    if not text:
+        return False
+
+    # direct textual mention @BotUsername
+    if bot_username and f"@{bot_username}" in text:
+        return True
+
+    # check entities for mention or text_mention
+    entities = update.effective_message.entities or []
+    for ent in entities:
+        if ent.type in ("mention", "text_mention"):
+            return True
+
+    return False
+
+
+# --- Message handler / matching logic ---
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Main message handler: match user query to best answer and respond according to thresholds."""
+    msg = update.message
+    if not msg or not msg.text:
+        return  # ignore non-text messages
+
+    text = msg.text.strip()
+    if not text:
+        return
+
+    # get cache from application bot_data
+    cache: Optional[QACache] = context.application.bot_data.get("qa_cache")
+    if not cache:
+        # fallback: read directly from DB if cache missing (shouldn't happen normally)
+        logger.warning("QACache missing from app.bot_data — reading directly from DB.")
+        conn = db.connect(DB_PATH)
+        try:
+            q_rows = db.list_all_qna(conn)
+            qas = []
+            for r in q_rows:
+                qas.append({
+                    "id": int(r["id"]),
+                    "question": r["question"],
+                    "question_norm": r["question_norm"],
+                    "answer": r["answer"],
+                    "category": r["category"] or "",
+                })
+        finally:
+            conn.close()
+    else:
+        qas = cache.get_qas()
+
+    if not qas:
+        logger.warning("No QAs loaded in cache or DB.")
+        # if bot was explicitly asked (private or mention), reply with apology
+        bot_username = context.bot.username if context and context.bot else None
+        if is_mentioned(update, bot_username):
+            await msg.reply_text(APOLOGY_MSG)
+        return
+
+    best = find_best_match(text, qas)
+    bot_username = context.bot.username if context and context.bot else None
+    mentioned = is_mentioned(update, bot_username)
+
+    if not best:
+        logger.debug("Matcher returned no best result.")
+        if mentioned:
+            try:
+                conn = db.connect(DB_PATH)
+                db.log_unanswered(conn, user_id=msg.from_user.id if msg.from_user else None,
+                                question=text, question_norm=normalize_ar(text))
+            finally:
+                conn.close()
+            await msg.reply_text(APOLOGY_MSG)
+        return
+
+    score = int(best.get("score", 0))
+    answer = best.get("answer")
+    matched_id = best.get("id")
+    matched_q = best.get("question") or best.get("matched_q_norm")
+    category = best.get("category", "")
+
+    threshold = MENTION_THRESHOLD if mentioned else NORMAL_THRESHOLD
+
+    logger.info(
+        "Incoming message: [%s] | norm: [%s] | matched_id: %s | score: %s | threshold: %s | mentioned: %s",
+        text,
+        best.get("msg_norm"),
+        matched_id,
+        score,
+        threshold,
+        mentioned,
+    )
+
+    if score >= threshold and answer:
+        await msg.reply_text(answer)
+    else:
+        if mentioned:
+            await msg.reply_text(APOLOGY_MSG)
+        # else: silent when not mentioned and below threshold
+
+
+# --- Basic user commands ---
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "مرحبًا — أنا بوت الإجابات السريعة.\n"
+        "اسأل سؤالك هنا أو اذكرني في المجموعة للرد.\n\n"
+        "المسؤولون يمكنهم إدارة الأسئلة عبر الرسائل الخاصة."
+    )
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "أنا بوت للإجابة على الأسئلة الشائعة.\n\n"
+        "- اذكرني في المجموعة لأجيب"
+        "- إن لم تذكرني سأرد فقط على أسئلة واضحة.\n\n"
+        "المشرفون يمكنهم إدارة الأسئلة عبر الرسائل الخاصة."
+    )
+    await update.message.reply_text(text)
+
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to manage Q&A via private messages."""
+    if not is_admin_private(update):
+        await update.message.reply_text("هذا الأمر متاح فقط للمشرفين عبر الرسائل الخاصة.")
+        return
+
+    commands = {
+        "/categories": "عرض الفئات المتاحة.",
+        "/list_qas": "عرض الأسئلة والأجوبة.",
+        "/add_qna": "إضافة سؤال وجواب جديد.",
+        "/update_qna": "تحديث سؤال أو جواب موجود.",
+        "/delete_qna": "حذف سؤال وجواب.",
+    }
+
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN environment variable is required")
+
+    # Ensure DB schema exists
+    conn = db.connect(DB_PATH)
+    try:
+        db.init_db(conn)
+    finally:
+        conn.close()
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    cache = QACache(DB_PATH, ttl=QA_CACHE_TTL)
+    # Eagerly load cache once to surface DB errors early
+    try:
+        cache.force_reload()
+    except Exception:
+        logger.exception("Failed to eager-load QACache on startup; continuing (will retry lazily).")
+
+    # Optionally start auto-refresh
+    if QA_CACHE_AUTO_REFRESH:
+        cache.start_auto_refresh(QA_CACHE_AUTO_INTERVAL)
+        logger.info("QACache auto-refresh enabled (interval=%s s).", QA_CACHE_AUTO_INTERVAL)
+
+    # store cache in app.bot_data so handlers & commands can access it
+    app.bot_data["qa_cache"] = cache
+
+    # Register admin command handlers (they will use db functions and should invalidate cache after mutations)
+    register_command_handlers(app)
+
+    # Basic public commands
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd, filters=filters.TEXT & filters.ChatType.PRIVATE))
+
+    # Message handler for groups/public/private (non-command messages)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+    # Start polling
+    logger.info("Starting bot …")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

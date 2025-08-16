@@ -10,7 +10,7 @@ import logging
 import time
 from typing import List, Tuple, Optional, Dict, Any
 
-from telegram import Update
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -131,7 +131,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 conn = db.connect(DB_PATH)
                 db.log_unanswered(conn, user_id=msg.from_user.id if msg.from_user else None,
-                                question=text, question_norm=normalize_ar(text))
+                                 question=text, question_norm=normalize_ar(text))
             finally:
                 conn.close()
             await msg.reply_text(APOLOGY_MSG)
@@ -175,7 +175,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "أنا بوت للإجابة على الأسئلة الشائعة.\n\n"
-        "- اذكرني في المجموعة لأجيب"
+        "- اذكرني في المجموعة لأجيب\n"
         "- إن لم تذكرني سأرد فقط على أسئلة واضحة.\n\n"
         "المشرفون يمكنهم إدارة الأسئلة عبر الرسائل الخاصة."
     )
@@ -187,13 +187,19 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("هذا الأمر متاح فقط للمشرفين عبر الرسائل الخاصة.")
         return
 
-    commands = {
-        "/categories": "عرض الفئات المتاحة.",
-        "/list_qas": "عرض الأسئلة والأجوبة.",
-        "/add_qna": "إضافة سؤال وجواب جديد.",
-        "/update_qna": "تحديث سؤال أو جواب موجود.",
-        "/delete_qna": "حذف سؤال وجواب.",
-    }
+    admin_kb = ReplyKeyboardMarkup(
+        [
+            ["/categories", "/list_qas"],
+            ["/add_qna", "/update_qna", "/delete_qna"],
+        ],
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+    await update.message.reply_text(
+        "أهلاً بك في لوحة تحكم المشرفين! اختر أمرًا من الأزرار أدناه:",
+        reply_markup=admin_kb
+    )
+
 
 def main():
     if not BOT_TOKEN:

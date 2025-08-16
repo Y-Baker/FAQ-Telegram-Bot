@@ -4,6 +4,7 @@ Telegram FAQ Bot — Command Handlers
 """
 
 import os
+import logging
 from typing import Optional, List, Tuple
 
 from telegram import (
@@ -11,6 +12,7 @@ from telegram import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from telegram.ext import (
     ContextTypes,
@@ -26,6 +28,8 @@ from utils.category import Category
 from utils.load_admins import load_admin_ids
 import db  # centralized DB service module (connect, add_qna, get_qna_by_id, ...)
 from utils.load_admins import load_admin_ids
+
+logger = logging.getLogger(__name__)
 
 ADMIN_IDS = None
 
@@ -57,7 +61,6 @@ def insert_qna(question: str, answer: str, category: Optional[str]) -> int:
     conn = _get_db_conn()
     try:
         q_norm = normalize_ar(question)
-        # db.add_qna(conn, question, question_norm, answer, category)
         return db.add_qna(conn, question, q_norm, answer, category)
     finally:
         conn.close()
@@ -69,11 +72,9 @@ def list_qas(limit: int = 50) -> List[Tuple[int, str, str]]:
         rows = db.list_all_qna(conn)
     finally:
         conn.close()
-    # rows are sqlite3.Row objects (id, question, question_norm, answer, category, last_updated)
     results = []
-    for r in reversed(rows):  # db.list_all_qna returns ascending; present newest first
+    for r in reversed(rows):
         results.append((r["id"], r["question"], r["category"] or ""))
-    # limit and return latest `limit`
     return list(sorted(results, key=lambda x: x[0], reverse=True))[:limit]
 
 
@@ -92,7 +93,7 @@ def find_qas_by_text(text: str, limit: int = 10) -> List[Tuple[int, str, str]]:
     """Search by text using centralized db.search_qna_by_question (uses LIKE on question/question_norm)."""
     conn = _get_db_conn()
     try:
-        rows = db.search_qna_by_question(conn, text)  # expecting list of rows
+        rows = db.search_qna_by_question(conn, text)
     finally:
         conn.close()
     results = []
@@ -110,7 +111,6 @@ def update_qna_field(qna_id: int, field: str, value: str) -> bool:
         raise ValueError("Invalid field to update")
     conn = _get_db_conn()
     try:
-        # db.update_qna(conn, qna_id, field, value)
         return db.update_qna(conn, qna_id, field, value)
     finally:
         conn.close()
@@ -148,16 +148,27 @@ async def list_qas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin_private(update):
         await update.message.reply_text("هذا الأمر متاح للمشرفين فقط وفي المحادثة الخاصة.")
         return
-    rows = list_qas(limit=50)
+    
+    rows = list_qas(limit=10) # Smaller limit to make inline buttons more manageable
     if not rows:
-        await update.message.reply_text("لا توجد أسئلة مخزنة حالياً.")
+        await update.message.reply_text("لا توجد أسئلة مخزنة حالياً. ℹ️")
         return
-    lines = []
+        
     for _id, q, cat in rows:
-        q_short = (q[:80] + "…") if len(q) > 80 else q
-        lines.append(f"#{_id} — {q_short} [{cat or '—'}]")
-    text = "الأسئلة المحفوظة (أحدث 50):\n\n" + "\n".join(lines)
-    await update.message.reply_text(text)
+        q_short = (q[:50] + "…") if len(q) > 50 else q
+        text = f"**#{_id}** — {q_short} [_{cat or '—'}_]"
+        
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
+                    InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
+                ]
+            ]
+        )
+        await update.message.reply_text(text, reply_markup=kb, parse_mode='Markdown')
+
+    await update.message.reply_text("⬆️ هذه آخر الأسئلة. للمزيد، يرجى استخدام البحث في الأوامر الأخرى.")
 
 
 # -----------------------
@@ -167,19 +178,18 @@ async def add_qna_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin_private(update):
         await update.message.reply_text("يرجى استخدام هذا الأمر في المحادثة الخاصة من قِبل المشرفين فقط.")
         return ConversationHandler.END
-    await update.message.reply_text("أرسل السؤال الآن")
+    await update.message.reply_text("أرسل السؤال الآن ✍️")
     return ADD_Q
 
 
 async def add_qna_receive_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["add_question"] = update.message.text.strip()
-    await update.message.reply_text("أرسل الإجابة الآن")
+    await update.message.reply_text("أرسل الإجابة الآن 🤖")
     return ADD_A
 
 
 async def add_qna_receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["add_answer"] = update.message.text.strip()
-    # show categories as inline buttons
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton(cat.value, callback_data=f"addcat::{cat.name}")] for cat in Category]
     )
@@ -188,11 +198,10 @@ async def add_qna_receive_answer(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def add_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """CallbackQuery handler for category selection during add flow"""
     if not is_admin_private(update):
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
-    data = update.callback_query.data  # format addcat::CATEGORY_NAME
+    data = update.callback_query.data
     try:
         _, cat_name = data.split("::", 1)
     except Exception:
@@ -204,7 +213,13 @@ async def add_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     category_value = Category[cat_name].value if cat_name in Category.__members__ else Category.GENERAL.value
 
     qna_id = insert_qna(question, answer, category_value)
-    await update.callback_query.edit_message_text("تمت الإضافة بنجاح ✅")
+    
+    # Invalidate the cache after a mutation
+    qa_cache = context.application.bot_data.get("qa_cache")
+    if qa_cache:
+        qa_cache.invalidate()
+        
+    await update.callback_query.edit_message_text(f"تمت الإضافة بنجاح ✅\n**ID: {qna_id}**", parse_mode='Markdown')
     # clear temporary data
     context.user_data.pop("add_question", None)
     context.user_data.pop("add_answer", None)
@@ -227,38 +242,33 @@ async def update_qna_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def update_qna_receive_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     qna_id = None
-    # try parse as int id
     try:
         qna_id = int(text)
     except ValueError:
-        # search by text
         matches = find_qas_by_text(text, limit=5)
         if not matches:
             await update.message.reply_text("لم يتم العثور على نتيجة. حاول مرة أخرى أو أرسل /cancel.")
             return UPD_ID
-        # if multiple matches, present them inline to choose
         if len(matches) > 1:
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton(f"#{r[0]} — {r[1][:50]}…", callback_data=f"updchoose::{r[0]}")] for r in matches]
             )
             await update.message.reply_text("اختيارات مطابقة — اختر واحد:", reply_markup=kb)
-            return UPD_FIELD  # wait for callback
+            return UPD_FIELD
         else:
             qna_id = matches[0][0]
 
-    # store and ask which field
     context.user_data["upd_qna_id"] = qna_id
     kb = ReplyKeyboardMarkup([["السؤال", "الإجابة", "الفئة"]], one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text("اختر ما تريد تعديله (مكتبتي):", reply_markup=kb)
+    await update.message.reply_text(f"تم اختيار **QnA #{qna_id}**. اختر ما تريد تعديله:", reply_markup=kb, parse_mode='Markdown')
     return UPD_FIELD
 
 
 async def update_qna_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback when user clicked one of search results during update flow"""
     if not is_admin_private(update):
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
-    data = update.callback_query.data  # e.g., 'updchoose::123'
+    data = update.callback_query.data
     try:
         _, id_str = data.split("::", 1)
         qna_id = int(id_str)
@@ -267,7 +277,7 @@ async def update_qna_choice_callback(update: Update, context: ContextTypes.DEFAU
         return ConversationHandler.END
 
     context.user_data["upd_qna_id"] = qna_id
-    await update.callback_query.edit_message_text(f"تم اختيار QnA #{qna_id}. الآن اختر الحقل لتعديله.")
+    await update.callback_query.edit_message_text(f"تم اختيار **QnA #{qna_id}**. الآن اختر الحقل لتعديله.", parse_mode='Markdown')
     kb = ReplyKeyboardMarkup([["السؤال", "الإجابة", "الفئة"]], one_time_keyboard=True, resize_keyboard=True)
     await update.effective_message.reply_text("اختر ما تريد تعديله:", reply_markup=kb)
     return UPD_FIELD
@@ -289,7 +299,7 @@ async def update_qna_field_choice(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("اختر الفئة الجديدة:", reply_markup=kb)
         return UPD_VAL
     else:
-        await update.message.reply_text("أرسل القيمة الجديدة:")
+        await update.message.reply_text(f"أرسل القيمة الجديدة لـ **{text}**:", parse_mode='Markdown')
         return UPD_VAL
 
 
@@ -299,16 +309,18 @@ async def update_qna_receive_value(update: Update, context: ContextTypes.DEFAULT
     new_value = update.message.text.strip()
     ok = update_qna_field(qna_id, field, new_value)
     if ok:
-        await update.message.reply_text("تم التحديث بنجاح ✅")
+        qa_cache = context.application.bot_data.get("qa_cache")
+        if qa_cache:
+            qa_cache.invalidate()
+        await update.message.reply_text(f"تم التحديث بنجاح ✅", reply_markup=ReplyKeyboardRemove())
     else:
-        await update.message.reply_text("لم يتم العثور على العنصر أو لم يحدث تغيير.")
+        await update.message.reply_text("لم يتم العثور على العنصر أو لم يحدث تغيير. ❌", reply_markup=ReplyKeyboardRemove())
     context.user_data.pop("upd_qna_id", None)
     context.user_data.pop("upd_field", None)
     return ConversationHandler.END
 
 
 async def update_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # callback data format: updcat::CATEGORY_NAME
     if not is_admin_private(update):
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
@@ -322,9 +334,12 @@ async def update_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_T
     category_value = Category[cat_name].value if cat_name in Category.__members__ else Category.GENERAL.value
     ok = update_qna_field(qna_id, "category", category_value)
     if ok:
-        await update.callback_query.edit_message_text("تم التحديث بنجاح ✅")
+        qa_cache = context.application.bot_data.get("qa_cache")
+        if qa_cache:
+            qa_cache.invalidate()
+        await update.callback_query.edit_message_text(f"تم التحديث بنجاح ✅")
     else:
-        await update.callback_query.edit_message_text("فشل التحديث أو العنصر غير موجود.")
+        await update.callback_query.edit_message_text("فشل التحديث أو العنصر غير موجود. ❌")
     context.user_data.pop("upd_qna_id", None)
     context.user_data.pop("upd_field", None)
     return ConversationHandler.END
@@ -366,12 +381,11 @@ async def delete_qna_receive_id(update: Update, context: ContextTypes.DEFAULT_TY
             [InlineKeyboardButton("✅ نعم", callback_data="del_yes"), InlineKeyboardButton("❌ لا", callback_data="del_no")]
         ]
     )
-    await update.message.reply_text("هل أنت متأكد من الحذف؟", reply_markup=kb)
+    await update.message.reply_text(f"هل أنت متأكد من حذف **QnA #{qna_id}**؟", reply_markup=kb, parse_mode='Markdown')
     return DEL_CONFIRM
 
 
 async def delete_qna_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # user clicked a search result to choose item
     if not is_admin_private(update):
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
@@ -388,7 +402,7 @@ async def delete_qna_choice_callback(update: Update, context: ContextTypes.DEFAU
             [InlineKeyboardButton("✅ نعم", callback_data="del_yes"), InlineKeyboardButton("❌ لا", callback_data="del_no")]
         ]
     )
-    await update.callback_query.edit_message_text(f"تم اختيار QnA #{qna_id}. هل أنت متأكد من الحذف؟", reply_markup=kb)
+    await update.callback_query.edit_message_text(f"تم اختيار **QnA #{qna_id}**. هل أنت متأكد من الحذف؟", reply_markup=kb, parse_mode='Markdown')
     return DEL_CONFIRM
 
 
@@ -402,9 +416,12 @@ async def delete_qna_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TY
         qna_id = int(context.user_data.get("del_qna_id"))
         ok = delete_qna_by_id(qna_id)
         if ok:
+            qa_cache = context.application.bot_data.get("qa_cache")
+            if qa_cache:
+                qa_cache.invalidate()
             await update.callback_query.edit_message_text("تم الحذف بنجاح ✅")
         else:
-            await update.callback_query.edit_message_text("لم يتم العثور على العنصر.")
+            await update.callback_query.edit_message_text("لم يتم العثور على العنصر. ❌")
     else:
         await update.callback_query.edit_message_text("تم إلغاء الحذف ❌")
 
@@ -443,10 +460,13 @@ def register_command_handlers(application):
     upd_conv = ConversationHandler(
         entry_points=[CommandHandler("update_qna", update_qna_start)],
         states={
-            UPD_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, update_qna_receive_id)],
+            UPD_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, update_qna_receive_id),
+                CallbackQueryHandler(update_qna_choice_callback, pattern=r"^updchoose::"),
+            ],
             UPD_FIELD: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, update_qna_field_choice),
-                CallbackQueryHandler(update_qna_choice_callback, pattern=r"^updchoose::"),
+                CallbackQueryHandler(update_qna_choice_callback, pattern=r"^upd_id::"),
             ],
             UPD_VAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, update_qna_receive_value),
@@ -462,9 +482,12 @@ def register_command_handlers(application):
     del_conv = ConversationHandler(
         entry_points=[CommandHandler("delete_qna", delete_qna_start)],
         states={
-            DEL_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_qna_receive_id)],
-            DEL_CONFIRM: [
+            DEL_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, delete_qna_receive_id),
                 CallbackQueryHandler(delete_qna_choice_callback, pattern=r"^delchoose::"),
+            ],
+            DEL_CONFIRM: [
+                CallbackQueryHandler(delete_qna_choice_callback, pattern=r"^del_id::"),
                 CallbackQueryHandler(delete_qna_confirm_cb, pattern=r"^del_(yes|no)$"),
             ],
         },

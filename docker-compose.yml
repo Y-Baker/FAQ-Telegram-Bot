@@ -23,3 +23,14 @@ services:
       interval: 60s
       timeout: 5s
       retries: 3
+
+  migrate:
+    build: .
+    image: faq-bot-migrate:latest
+    command: ["python", "src/cli.py", "--db", "/app/data/faq.db", "--migrate", "/app/data/qa.json"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+

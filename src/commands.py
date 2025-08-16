@@ -5,6 +5,7 @@ Telegram FAQ Bot — Command Handlers
 
 import os
 import logging
+import re
 from typing import Optional, List, Tuple
 
 from telegram import (
@@ -22,6 +23,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
+from telegram.constants import ParseMode
 
 from normalize import normalize_ar
 from utils.category import Category
@@ -29,9 +31,38 @@ from utils.load_admins import load_admin_ids
 import db  # centralized DB service module (connect, add_qna, get_qna_by_id, ...)
 from utils.load_admins import load_admin_ids
 
+_MD_V2_PATTERN = re.compile(r'([_\*\[\]\(\)~`>#+\-=|{}\.!])')
 logger = logging.getLogger(__name__)
-
 ADMIN_IDS = None
+
+def escape_markdown_v2(text: str) -> str:
+    """Escape text for MarkdownV2 (safe for Arabic)."""
+    if not text:
+        return ""
+    return _MD_V2_PATTERN.sub(r'\\\1', text)
+
+
+def _format_short_q(row_id: int, question: str, category: str) -> str:
+    category = Category.get_arabic(category) if category else "—"
+    # Escape dynamic parts
+    q_esc = escape_markdown_v2(question)
+    cat_esc = escape_markdown_v2(category)
+
+    # Shorten question for list view
+    short_raw = question if len(question) <= 80 else question[:77] + "…"
+    short_q = escape_markdown_v2(short_raw)
+
+    return f"*\\#{row_id}*  —  {short_q}\n_التصنيف:_ {cat_esc}"
+
+
+def _format_full_q(row: dict) -> str:
+    category = Category.get_arabic(row.get("category")) if row.get("category") else "—"
+    q = escape_markdown_v2(row.get("question") or "")
+    a = escape_markdown_v2(row.get("answer") or "")
+    cat = escape_markdown_v2(category)
+
+    return f"*\\#Q{row.get('id')}*\n\n*السؤال:*\n{q}\n\n*الإجابة:*\n{a}\n\n*التصنيف:* {cat}"
+
 
 def is_admin_private(update: Update) -> bool:
     """Return True only if the message is from a configured admin and in private chat."""
@@ -66,16 +97,16 @@ def insert_qna(question: str, answer: str, category: Optional[str]) -> int:
         conn.close()
 
 
-def list_qas(limit: int = 50) -> List[Tuple[int, str, str]]:
+def list_qas(limit: int = 30, offset_id=0) -> List[Tuple[int, str, str]]:
     conn = _get_db_conn()
     try:
-        rows = db.list_all_qna(conn)
+        rows = db.list_all_qna(conn, limit=limit, offset_id=offset_id)
     finally:
         conn.close()
     results = []
-    for r in reversed(rows):
+    for r in rows:
         results.append((r["id"], r["question"], r["category"] or ""))
-    return list(sorted(results, key=lambda x: x[0], reverse=True))[:limit]
+    return list(results)
 
 
 def get_qna_by_id(qna_id: int) -> Optional[Tuple[int, str, str, str]]:
@@ -148,28 +179,109 @@ async def list_qas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin_private(update):
         await update.message.reply_text("هذا الأمر متاح للمشرفين فقط وفي المحادثة الخاصة.")
         return
-    
-    rows = list_qas(limit=10) # Smaller limit to make inline buttons more manageable
+
+    rows = list_qas(limit=30)
     if not rows:
         await update.message.reply_text("لا توجد أسئلة مخزنة حالياً. ℹ️")
         return
-        
+
     for _id, q, cat in rows:
-        q_short = (q[:50] + "…") if len(q) > 50 else q
-        text = f"**#{_id}** — {q_short} [_{cat or '—'}_]"
-        
+        text = _format_short_q(_id, q, cat)
         kb = InlineKeyboardMarkup(
             [
                 [
+                    InlineKeyboardButton("عرض 🔍", callback_data=f"view::{_id}"),
                     InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
                     InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
                 ]
             ]
         )
-        await update.message.reply_text(text, reply_markup=kb, parse_mode='Markdown')
+        await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
 
-    await update.message.reply_text("⬆️ هذه آخر الأسئلة. للمزيد، يرجى استخدام البحث في الأوامر الأخرى.")
+    await update.message.reply_text("⬆️ هذه أحدث الأسئلة. اضغط على *عرض* لرؤية التفاصيل أو استخدم الأزرار للتعديل/الحذف.", parse_mode=ParseMode.MARKDOWN_V2)
 
+async def view_qna_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.callback_query.data
+    try:
+        _, id_str = data.split("::", 1)
+        qna_id = int(id_str)
+    except Exception:
+        await update.callback_query.answer("خطأ في الطلب.")
+        return
+
+    qna = get_qna_by_id(qna_id)
+    if not qna:
+        await update.callback_query.answer("لم يتم العثور على هذا العنصر.")
+        return
+
+    _id, question, answer, category = qna
+    row = {"id": _id, "question": question, "answer": answer, "category": category}
+    text = _format_full_q(row)
+
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
+                InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
+            ],
+            [InlineKeyboardButton("إغلاق ✖️", callback_data=f"close_view::{_id}")],
+        ]
+    )
+
+    try:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
+    except Exception:
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
+
+    await update.callback_query.answer()
+
+async def close_view_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.delete_message()
+    except Exception:
+        try:
+            await update.callback_query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    await update.callback_query.answer()
+
+async def get_qna_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage: /get_qna 123
+    Fetches QnA with DB id 123 and displays full Q&A.
+    """
+    if not is_admin_private(update):
+        await update.message.reply_text("هذا الأمر متاح للمشرفين فقط وفي المحادثة الخاصة.")
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("استخدم: /get_qna <ID> — مثال: /get_qna 12")
+        return
+
+    try:
+        qna_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("الرجاء إدخال رقم معرف صالح.")
+        return
+
+    qna = get_qna_by_id(qna_id)
+    if not qna:
+        await update.message.reply_text(f"لم يتم العثور على QnA بالمعرف {qna_id}.")
+        return
+
+    _id, question, answer, category = qna
+    row = {"id": _id, "question": question, "answer": answer, "category": category}
+    text = _format_full_q(row)
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
+                InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
+            ]
+        ]
+    )
+    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
 
 # -----------------------
 # /add_qna flow (private admins only)
@@ -442,6 +554,7 @@ def register_command_handlers(application):
     # categories and list (simple commands)
     application.add_handler(CommandHandler("categories", categories_cmd))
     application.add_handler(CommandHandler("list_qas", list_qas_cmd))
+    application.add_handler(CommandHandler("get_qna", get_qna_cmd))
 
     # --- ADD QnA conversation handler ---
     add_conv = ConversationHandler(
@@ -495,3 +608,14 @@ def register_command_handlers(application):
         allow_reentry=True,
     )
     application.add_handler(del_conv)
+
+    # Add a handler for the pagination buttons
+    # application.add_handler(CallbackQueryHandler(pagination_callback, pattern=r"^(next_page::|start_page)"))
+
+    # ensure callbacks for inline buttons are registered
+    application.add_handler(CallbackQueryHandler(view_qna_cb, pattern=r"^view::"))
+    application.add_handler(CallbackQueryHandler(close_view_cb, pattern=r"^close_view::"))
+    # existing update/delete button handlers (if not present) — ensure patterns match:
+    application.add_handler(CallbackQueryHandler(update_qna_choice_callback, pattern=r"^upd_id::"))
+    application.add_handler(CallbackQueryHandler(delete_qna_choice_callback, pattern=r"^del_id::"))
+

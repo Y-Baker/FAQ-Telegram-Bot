@@ -100,9 +100,9 @@ def search_qna_by_question(conn: sqlite3.Connection, search_term: str) -> List[s
     """, (f"%{search_term}%", f"%{search_term}%"))
     return cur.fetchall()
 
-def list_all_qna(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+def list_all_qna(conn: sqlite3.Connection, limit: int = 30, offset_id: int = 0) -> List[sqlite3.Row]:
     cur = conn.cursor()
-    cur.execute("SELECT * FROM qa ORDER BY id ASC")
+    cur.execute("SELECT * FROM qa WHERE id > ? ORDER BY id ASC LIMIT ?", (offset_id, limit))
     return cur.fetchall()
 
 def load_qna(conn: sqlite3.Connection) -> List[Tuple[str, str]]:

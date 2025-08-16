@@ -171,6 +171,16 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "المسؤولون يمكنهم إدارة الأسئلة عبر الرسائل الخاصة."
     )
 
+    if is_admin_private(update):
+        admin_kb = ReplyKeyboardMarkup(
+            "/admin",
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+        await update.message.reply_text(
+            "للمشرفين: استخدم /admin لإدارة الأسئلة.",
+            reply_markup=admin_kb
+        )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -189,7 +199,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admin_kb = ReplyKeyboardMarkup(
         [
-            ["/categories", "/list_qas"],
+            ["/categories", "/list_qas", "/get_qna"],
             ["/add_qna", "/update_qna", "/delete_qna"],
         ],
         one_time_keyboard=True,

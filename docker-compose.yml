@@ -1,0 +1,25 @@
+version: "3.8"
+services:
+  faq-bot:
+    build: .
+    container_name: faq-bot
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=${DB_PATH:-/app/data/faq.db}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - MENTION_THRESHOLD=${MENTION_THRESHOLD:-70}
+      - NORMAL_THRESHOLD=${NORMAL_THRESHOLD:-80}
+      - QA_CACHE_TTL=${QA_CACHE_TTL:-30}
+      - QA_CACHE_AUTO_REFRESH=${QA_CACHE_AUTO_REFRESH:-false}
+      - QA_CACHE_AUTO_INTERVAL=${QA_CACHE_AUTO_INTERVAL:-120}
+      - APOLOGY_MSG=${APOLOGY_MSG}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "src/bot.py"]
+      interval: 60s
+      timeout: 5s
+      retries: 3

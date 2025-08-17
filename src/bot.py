@@ -47,37 +47,45 @@ QA_CACHE_AUTO_REFRESH = os.getenv("QA_CACHE_AUTO_REFRESH", "false").lower() in (
 QA_CACHE_AUTO_INTERVAL = int(os.getenv("QA_CACHE_AUTO_INTERVAL", "120"))
 
 
-# --- Mention detection ---
 def is_mentioned(update: Update, bot_username: Optional[str]) -> bool:
     """
     Return True if:
-      - chat is private (we treat private chats as explicit request for response),
+      - chat is private (explicit request for response),
       - OR the bot is mentioned via @username in the text,
-      - OR message.entities contains a mention/text_mention.
+      - OR message.entities contains a mention/text_mention,
+      - OR the message is a reply to the bot.
     """
     if update.effective_message is None:
         return False
 
-    # treat private chat as explicit (so bot always answers or apologizes)
     chat = update.effective_chat
     if chat and chat.type == "private":
         return True
 
     text = update.effective_message.text or ""
-    if not text:
-        return False
 
-    # direct textual mention @BotUsername
-    if bot_username and f"@{bot_username}" in text:
+    # direct textual mention
+    if bot_username and text and f"@{bot_username}" in text:
         return True
 
-    # check entities for mention or text_mention
+    # check entities
     entities = update.effective_message.entities or []
     for ent in entities:
-        if ent.type in ("mention", "text_mention"):
+        if ent.type == "mention":
+            mention_text = text[ent.offset:ent.offset + ent.length]
+            if mention_text.lower() == f"@{bot_username.lower()}":
+                return True
+        elif ent.type == "text_mention" and ent.user and ent.user.username:
+            if ent.user.username.lower() == bot_username.lower():
+                return True
+
+    reply = update.effective_message.reply_to_message
+    if reply and reply.from_user and reply.from_user.username:
+        if reply.from_user.username.lower() == bot_username.lower():
             return True
 
     return False
+
 
 def remove_mentions(text: str) -> str:
     """

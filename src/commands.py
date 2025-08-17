@@ -615,7 +615,10 @@ def register_command_handlers(application):
 
     # --- UPDATE QnA conversation handler ---
     upd_conv = ConversationHandler(
-        entry_points=[CommandHandler("update_qna", update_qna_start)],
+        entry_points=[
+            CommandHandler("update_qna", update_qna_start),
+            CallbackQueryHandler(update_qna_choice_callback, pattern=r"^upd_id::"),
+        ],
         states={
             UPD_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, update_qna_receive_id),
@@ -623,7 +626,6 @@ def register_command_handlers(application):
             ],
             UPD_FIELD: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, update_qna_field_choice),
-                CallbackQueryHandler(update_qna_choice_callback, pattern=r"^upd_id::"),
             ],
             UPD_VAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, update_qna_receive_value),
@@ -637,7 +639,10 @@ def register_command_handlers(application):
 
     # --- DELETE QnA conversation handler ---
     del_conv = ConversationHandler(
-        entry_points=[CommandHandler("delete_qna", delete_qna_start)],
+        entry_points=[
+            CommandHandler("delete_qna", delete_qna_start),
+            CallbackQueryHandler(delete_qna_choice_callback, pattern=r"^del_id::"),
+        ],
         states={
             DEL_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, delete_qna_receive_id),
@@ -659,7 +664,4 @@ def register_command_handlers(application):
     # ensure callbacks for inline buttons are registered
     application.add_handler(CallbackQueryHandler(view_qna_cb, pattern=r"^view::"))
     application.add_handler(CallbackQueryHandler(close_view_cb, pattern=r"^close_view::"))
-    # existing update/delete button handlers (if not present) — ensure patterns match:
-    application.add_handler(CallbackQueryHandler(update_qna_choice_callback, pattern=r"^upd_id::"))
-    application.add_handler(CallbackQueryHandler(delete_qna_choice_callback, pattern=r"^del_id::"))
 

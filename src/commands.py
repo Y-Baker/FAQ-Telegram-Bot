@@ -164,6 +164,49 @@ DEL_ID, DEL_CONFIRM = range(6, 8)
 
 
 # -----------------------
+# /lookup @username
+# -----------------------
+async def lookup_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage: /lookup [@username]
+    Fetches user info by username mention or by self if no username is given.
+    """
+    msg = update.message
+    if not msg or not msg.text:
+        return
+
+    parts = msg.text.strip().split()
+
+    # Default: self
+    if len(parts) == 1:
+        chat_id = update.effective_user.id
+    elif len(parts) == 2:
+        mention = parts[1].strip()
+        chat_id = mention[1:] if mention.startswith("@") else mention
+    else:
+        await msg.reply_text("Usage: /lookup [@username]")
+        return
+
+    try:
+        user = await context.bot.get_chat(chat_id)
+
+        text = (
+            f"👤 *User Info*\n"
+            f"*ID:* `{user.id}`\n"
+            f"*Username:* @{user.username or '—'}\n"
+            f"*First Name:* {escape_markdown_v2(user.first_name or '—')}\n"
+            f"*Last Name:* {escape_markdown_v2(user.last_name or '—')}"
+        )
+        await msg.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+
+    except Exception as e:
+        logger.error(f"Error fetching user info for {chat_id}: {e}")
+        logging.exception(e)
+        await msg.reply_text("⚠️ User not found or bot has no access.")
+
+
+
+# -----------------------
 # /categories command
 # -----------------------
 async def categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -177,7 +220,7 @@ async def categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -----------------------
 async def list_qas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin_private(update):
-        await update.message.reply_text("هذا الأمر متاح للمشرفين فقط وفي المحادثة الخاصة.")
+        await update.message.reply_text("هذا الأمر متاح للمشرفين فقط.")
         return
 
     rows = list_qas(limit=30)
@@ -552,9 +595,10 @@ def register_command_handlers(application):
     """
 
     # categories and list (simple commands)
-    application.add_handler(CommandHandler("categories", categories_cmd))
+    application.add_handler(CommandHandler("categories", categories_cmd, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("list_qas", list_qas_cmd))
     application.add_handler(CommandHandler("get_qna", get_qna_cmd))
+    application.add_handler(CommandHandler("lookup", lookup_username, filters=filters.TEXT & filters.ChatType.PRIVATE))
 
     # --- ADD QnA conversation handler ---
     add_conv = ConversationHandler(

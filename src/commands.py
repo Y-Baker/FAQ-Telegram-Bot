@@ -198,7 +198,7 @@ async def list_qas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
 
-    await update.message.reply_text("⬆️ هذه أحدث الأسئلة. اضغط على *عرض* لرؤية التفاصيل أو استخدم الأزرار للتعديل/الحذف.", parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text("⬆️ هذه أحدث الأسئلة اضغط على *عرض* لرؤية التفاصيل أو استخدم الأزرار للتعديل/الحذف", parse_mode=ParseMode.MARKDOWN_V2)
 
 async def view_qna_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data

@@ -79,8 +79,19 @@ def is_mentioned(update: Update, bot_username: Optional[str]) -> bool:
 
     return False
 
+def remove_mentions(text: str) -> str:
+    """
+    Remove @username mentions from the text.
+    """
+    if not text:
+        return text
 
-# --- Message handler / matching logic ---
+    import re
+    # remove @username mentions
+    text = re.sub(r"@\w+", "", text).strip()
+    
+    return text
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main message handler: match user query to best answer and respond according to thresholds."""
     msg = update.message
@@ -121,9 +132,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await msg.reply_text(APOLOGY_MSG)
         return
 
-    best = find_best_match(text, qas)
     bot_username = context.bot.username if context and context.bot else None
+
     mentioned = is_mentioned(update, bot_username)
+
+    text = remove_mentions(text)
+    best = find_best_match(text, qas)
 
     if not best:
         logger.debug("Matcher returned no best result.")
@@ -249,6 +263,7 @@ def main():
 
     # Message handler for groups/public/private (non-command messages)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, handle_text_message))
 
     # Start polling
     logger.info("Starting bot …")

@@ -24,7 +24,7 @@ class QACache:
         conn = db.connect(self.db_path)
         try:
             cur = conn.cursor()
-            cur.execute("SELECT id, question, question_norm, answer, category FROM qa ORDER BY id ASC")
+            cur.execute("SELECT id, question, embedding, question_norm, answer, category FROM qa ORDER BY id ASC")
             rows = cur.fetchall()
             qas = []
             for r in rows:
@@ -32,6 +32,7 @@ class QACache:
                     "id": int(r["id"]),
                     "question": r["question"],
                     "question_norm": r["question_norm"],
+                    "embedding": r["embedding"],
                     "answer": r["answer"],
                     "category": r["category"] or "",
                 })

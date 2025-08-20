@@ -165,13 +165,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     matched_id = best.get("id")
     matched_q = best.get("question") or best.get("matched_q_norm")
     category = best.get("category", "")
+    norm_question = best.get("norm_question")
 
     threshold = MENTION_THRESHOLD if mentioned else NORMAL_THRESHOLD
 
     logger.info(
         "Incoming message: [%s] | norm: [%s] | matched_id: %s | score: %s | threshold: %s | mentioned: %s",
         text,
-        best.get("msg_norm"),
+        norm_question,
         matched_id,
         score,
         threshold,

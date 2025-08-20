@@ -66,12 +66,14 @@ def find_best_match(user_question: str, qas: List[Any]) -> Optional[Dict[str, An
             continue
 
         score = np.dot(user_embedding, embedding) / (np.linalg.norm(user_embedding) * np.linalg.norm(embedding))
+        score *= 100  # scale to percentage
         if score > best_score:
             best_score = score
             best_match = {
             "answer": ans,
             "score": score,
             "question": orig_question,
+            "norm_question": item.get("question_norm") or "",
             "category": categorie,
             "id": id,
             "user_question": user_question,

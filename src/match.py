@@ -5,10 +5,9 @@ Telegram FAQ Bot — Matching User Queries to Answers
 from __future__ import annotations
 
 import os
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 
 from dotenv import load_dotenv
-from rapidfuzz import fuzz, process
 from sentence_transformers import SentenceTransformer
 import pickle
 import numpy as np
@@ -34,7 +33,8 @@ def embed_text(text: str) -> List[bytes]:
     embedding =  model.encode([text])[0]
     return pickle.dumps(embedding)
 
-
+def load_embedding(blob: bytes) -> np.ndarray:
+    return pickle.loads(blob)
 
 def find_best_match(user_question: str, qas: List[Any]) -> Optional[Dict[str, Any]]:
     if not qas:
@@ -50,7 +50,7 @@ def find_best_match(user_question: str, qas: List[Any]) -> Optional[Dict[str, An
         if isinstance(item, (list, tuple)) and len(item) >= 1:
             # treat as (embedding, answer) or (embedding, answer, ...)
             embedding = item[0]
-            embedding = pickle.loads(embedding)
+            embedding = load_embedding(embedding)
             ans = item[1] if len(item) > 1 else None
             id = None
             orig_question = None
@@ -58,7 +58,7 @@ def find_best_match(user_question: str, qas: List[Any]) -> Optional[Dict[str, An
         elif isinstance(item, dict):
             # expect dict keys: embedding, answer, id, question, category
             embedding = item.get("embedding") or item.get("question") or ""
-            embedding = pickle.loads(embedding)
+            embedding = load_embedding(embedding)
             ans = item.get("answer")
             id = item.get("id")
             orig_question = item.get("question")

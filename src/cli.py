@@ -24,7 +24,8 @@ def download_model(model_name: str = "all-MiniLM-L6-v2") -> None:
 
     # Download and save locally
     model = SentenceTransformer("sentence-transformers/" + model_name)
-    path = model.save("./models/" + model_name)
+    path = "./models/" + model_name
+    model.save(path)
     print("Model downloaded and saved to ", path)
 
 def parse_args() -> argparse.Namespace:

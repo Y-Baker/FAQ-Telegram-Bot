@@ -59,7 +59,7 @@ def find_best_match(user_question: str, embedding: List[Any]) -> Optional[Dict[s
     user_embedding = model.encode([user_norm])[0]
     
     scores = calculate_scores(user_embedding, embedding)
-    if not scores:
+    if scores is None or len(scores) == 0:
         return None
 
     best_idx = np.argmax(scores[:, 1])

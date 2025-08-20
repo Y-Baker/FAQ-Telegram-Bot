@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 from normalize import normalize_ar
-
+from db import add_qna
 
 def _validate_qa(i: int, item: Dict[str, Any]) -> None:
     if not isinstance(item, dict):
@@ -38,7 +38,6 @@ def migrate_qa(conn: sqlite3.Connection, json_path: str) -> int:
         if not isinstance(data, list):
             raise ValueError("Seed JSON must be a list of objects.")
 
-    cur = conn.cursor()
     inserted = 0
 
     for i, item in enumerate(data, start=1):
@@ -48,26 +47,15 @@ def migrate_qa(conn: sqlite3.Connection, json_path: str) -> int:
         c = (item.get("category") or "").strip() or None
 
         qn = normalize_ar(q)
-
-        try:
-            cur.execute(
-                """
-                INSERT INTO qa (question, question_norm, answer, category, last_updated)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (q, qn, a, c, datetime.utcnow().isoformat(timespec="seconds")),
-            )
+        if not qn:
+            raise ValueError(f"Item #{i} has an empty normalized question.")
+        
+        re = add_qna(conn, q, qn, a, c)
+        if re:
             inserted += 1
-        except sqlite3.IntegrityError:
-            # Duplicate normalized question → update answer/category instead (upsert-lite)
-            cur.execute(
-                """
-                UPDATE qa
-                   SET answer = ?, category = ?, last_updated = ?
-                 WHERE question_norm = ?
-                """,
-                (a, c, datetime.utcnow().isoformat(timespec="seconds"), qn),
-            )
+            print(f"Inserted/updated item #{i}: {q} -> {a} (category: {c})")
+        else:
+            print(f"Skipped duplicate item #{i}: {q}")
 
     conn.commit()
     return inserted

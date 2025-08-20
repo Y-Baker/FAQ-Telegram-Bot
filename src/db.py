@@ -6,12 +6,14 @@ Telegram FAQ Bot — Centralized Database Service (SQLite)
 from __future__ import annotations
 import sqlite3
 from typing import List, Optional, Tuple, Dict
-from match import embed_text
+from match import embed_text, load_embedding
+import numpy as np
 
 SCHEMA_QA = """
 CREATE TABLE IF NOT EXISTS qa (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question TEXT NOT NULL,
+    question_norm TEXT NOT NULL,
     embedding BLOB,
     answer TEXT NOT NULL,
     category TEXT,
@@ -114,6 +116,23 @@ def search_qna_by_question(conn: sqlite3.Connection, search_term: str) -> List[s
         ORDER BY last_updated DESC
     """, (f"%{search_term}%", f"%{search_term}%"))
     return cur.fetchall()
+
+def semantic_search(conn: sqlite3.Connection, query: str, top_k: int = 1):
+    query_emb = load_embedding(embed_text(query))
+
+    cur = conn.cursor()
+    cur.execute("SELECT id, question, question_norm, embedding, answer, category FROM qa")
+    rows = cur.fetchall()
+
+    scored = []
+    for row in rows:
+        db_emb = load_embedding(row["embedding"])
+        score = float(np.dot(query_emb, db_emb) /
+                      (np.linalg.norm(query_emb) * np.linalg.norm(db_emb)))
+        scored.append((score, row))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[:top_k]
 
 def list_all_qna(conn: sqlite3.Connection, limit: int = 30, offset_id: int = 0) -> List[sqlite3.Row]:
     cur = conn.cursor()

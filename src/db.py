@@ -132,6 +132,16 @@ def get_qna_by_id(conn: sqlite3.Connection, qna_id: int) -> Optional[sqlite3.Row
     cur.execute("SELECT * FROM qa WHERE id = ?", (qna_id,))
     return cur.fetchone()
 
+def get_qna_by_question(conn: sqlite3.Connection, question: str) -> Optional[sqlite3.Row]:
+    question_norm = normalize_ar(question)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM qa WHERE question_norm = ?", (question_norm,))
+    re = cur.fetchone()
+    if not re:
+        cur.execute("SELECT * FROM qa WHERE question = ?", (question,))
+        re = cur.fetchone()
+    return re
+
 def search_qna_by_question(conn: sqlite3.Connection, search_term: str) -> List[sqlite3.Row]:
     cur = conn.cursor()
     cur.execute("""

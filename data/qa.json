@@ -108,5 +108,10 @@
     "question": "الدورة بتخلص الساعة كام؟",
     "answer": "البنات من 9 إلى 1 ظهرًا، الأولاد من 7 إلى 1 ظهرًا وطبقًا لظروف العمل بالجامعة.",
     "category": "GENERAL"
+  },
+  {
+    "question": "ما هو موقع التسجيل الالكتروني؟",
+    "answer": "لينك موقع التسجيل الإلكتروني \nhttps://studentservices.menofia.education/militaryedu/StudentT/RegistStudent",
+    "category": "REGISTRATION"
   }
 ]

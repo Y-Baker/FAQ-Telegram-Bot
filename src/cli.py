@@ -6,7 +6,7 @@ Telegram FAQ Bot — CLI Utilities For Database Management
 import argparse
 import os
 from db import connect, init_db
-from seed import migrate_qa
+from seed import migrate_qa, migrate_variants
 
 from sentence_transformers import SentenceTransformer
 
@@ -31,7 +31,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Telegram FAQ Bot — Setup Utilities")
     p.add_argument("--db", default="faq.db", help="Path to SQLite database file (default: faq.db)")
     p.add_argument("--init", action="store_true", help="Create tables/indexes if missing and exit")
-    p.add_argument("--migrate", metavar="JSON", help="Seed Q&A from JSON file")
+    p.add_argument(
+        "--migrate",
+        metavar=("QA_JSON", "PARAPHRASES_JSON"),
+        nargs=2,
+        help="Seed Q&A and paraphrases from two JSON files: <qa.json> <paraphrases.json>"
+    )
     p.add_argument("--nlp", metavar="MODEL", nargs="?", const="all-MiniLM-L6-v2", help="Download and initialize NLP model (default: all-MiniLM-L6-v2)")
     return p.parse_args()
 
@@ -49,10 +54,20 @@ def main() -> None:
 
     # Migrate Q&A data if requested
     if args.migrate:
-        if not os.path.isfile(args.migrate):
-            raise FileNotFoundError(f"Seed file {args.migrate} does not exist.")
-        inserted = migrate_qa(conn, args.migrate)
-        print(f"Migration complete. Inserted/updated records from {args.migrate}: {inserted} new rows.")
+        if len(args.migrate) != 2:
+            print("Error: --migrate requires two arguments: <qa.json> <paraphrases.json>")
+            return
+        qa_json, paraphrases_json = args.migrate
+        if not os.path.exists(qa_json) or not os.path.exists(paraphrases_json):
+            print(f"Error: One or both files do not exist: {qa_json}, {paraphrases_json}")
+            return
+        
+        inserted = migrate_qa(conn, qa_json)
+        print(f"Inserted/updated records from {qa_json}: {inserted} new rows.")
+        inserted = migrate_variants(conn, paraphrases_json)
+        print(f"Inserted/updated paraphrases from {paraphrases_json}: {inserted} new rows.")
+        print("Migration completed successfully.")
+
 
     if args.nlp:
         download_model(args.nlp)

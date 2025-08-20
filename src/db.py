@@ -6,12 +6,13 @@ Telegram FAQ Bot — Centralized Database Service (SQLite)
 from __future__ import annotations
 import sqlite3
 from typing import List, Optional, Tuple, Dict
+from match import embed_text
 
 SCHEMA_QA = """
 CREATE TABLE IF NOT EXISTS qa (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question TEXT NOT NULL,
-    question_norm TEXT NOT NULL,
+    embedding BLOB,
     answer TEXT NOT NULL,
     category TEXT,
     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -60,23 +61,37 @@ def init_db(conn: sqlite3.Connection) -> None:
 # CRUD Operations for QA
 # -------------------------------
 def add_qna(conn: sqlite3.Connection, question: str, question_norm: str, answer: str, category: str) -> int:
+    embedding = embed_text(question_norm)
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO qa (question, question_norm, answer, category)
-        VALUES (?, ?, ?, ?)
-    """, (question, question_norm, answer, category))
+        INSERT INTO qa (question, embedding, question_norm, answer, category)
+        VALUES (?, ?, ?, ?, ?)
+    """, (question, embedding, question_norm, answer, category))
     conn.commit()
     return cur.lastrowid
 
 def update_qna(conn: sqlite3.Connection, qna_id: int, field: str, value: str) -> bool:
     if field not in {"question", "question_norm", "answer", "category"}:
         raise ValueError(f"Invalid field: {field}")
+    if field == "embedding":
+        raise ValueError("Embedding should not be updated directly, use 'question_norm' instead.")
+    embedding = None
+    if field == "question_norm":
+        embedding = embed_text(value)
+
     cur = conn.cursor()
-    cur.execute(f"""
-        UPDATE qa
-        SET {field} = ?, last_updated = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (value, qna_id))
+    if embedding is not None:
+        cur.execute(f"""
+            UPDATE qa
+            SET {field} = ?, embedding = ?, last_updated = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (value, embedding, qna_id))
+    else:
+        cur.execute(f"""
+            UPDATE qa
+            SET {field} = ?, last_updated = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (value, qna_id))
     conn.commit()
     return cur.rowcount > 0
 

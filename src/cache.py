@@ -14,6 +14,7 @@ class QACache:
         self._lock = threading.Lock()
         self._last_loaded = 0.0
         self._qas: List[Dict] = []
+        self._embeddings: List[Dict] = []
         self._stop_event = threading.Event()
         self._auto_thread: Optional[threading.Thread] = None
 
@@ -22,10 +23,12 @@ class QACache:
     # -----------------------
     def _load_from_db(self) -> List[Dict]:
         conn = db.connect(self.db_path)
+        if not conn:
+            logger.error("Failed to connect to database at %s", self.db_path)
+            return []
+        
         try:
-            cur = conn.cursor()
-            cur.execute("SELECT id, question, embedding, question_norm, answer, category FROM qa ORDER BY id ASC")
-            rows = cur.fetchall()
+            rows = db.list_all_qna(conn, limit=1000)
             qas = []
             for r in rows:
                 qas.append({
@@ -37,6 +40,24 @@ class QACache:
                     "category": r["category"] or "",
                 })
             return qas
+        finally:
+            conn.close()
+    
+    def _load_embeddings(self) -> List[Dict]:
+        conn = db.connect(self.db_path)
+        if not conn:
+            logger.error("Failed to connect to database at %s", self.db_path)
+            return []
+        
+        try:
+            rows = db.load_all_embeddings(conn)
+            embeddings = []
+            for r in rows:
+                embeddings.append({
+                    "id": int(r["id"]),
+                    "embedding": r["embedding"],
+                })
+            return embeddings
         finally:
             conn.close()
 
@@ -57,6 +78,20 @@ class QACache:
                     logger.exception("QACache: failed to reload from DB: %s", e)
             # return a shallow copy to prevent external mutation
             return list(self._qas)
+    
+    def get_embeddings(self) -> List[Dict]:
+        """Return the cached embeddings. Reloads if stale."""
+        with self._lock:
+            now = time.time()
+            if not self._embeddings or (now - self._last_loaded) > self.ttl:
+                logger.info("QACache: reloading embeddings cache (ttl expired or empty).")
+                try:
+                    self._embeddings = self._load_embeddings()
+                    self._last_loaded = now
+                except Exception as e:
+                    # keep old cache in case of DB error
+                    logger.exception("QACache: failed to reload embeddings from DB: %s", e)
+            return list(self._embeddings)
 
     def invalidate(self) -> None:
         """Mark cache stale — next get_qas() will reload from DB."""
@@ -71,6 +106,7 @@ class QACache:
             logger.info("QACache: force reloading now.")
             try:
                 self._qas = self._load_from_db()
+                self._embeddings = self._load_embeddings()
                 self._last_loaded = time.time()
             except Exception:
                 logger.exception("QACache: force reload failed, keeping old cache.")
@@ -84,6 +120,7 @@ class QACache:
             try:
                 with self._lock:
                     self._qas = self._load_from_db()
+                    self._embeddings = self._load_embeddings()
                     self._last_loaded = time.time()
                 logger.debug("QACache: auto-refreshed cache.")
             except Exception:

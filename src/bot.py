@@ -118,7 +118,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         conn = db.connect(DB_PATH)
         try:
             q_rows = db.list_all_qna(conn)
+            em_rows = db.load_all_embeddings(conn)
             qas = []
+            embeddings = []
             for r in q_rows:
                 qas.append({
                     "id": int(r["id"]),
@@ -128,12 +130,19 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "answer": r["answer"],
                     "category": r["category"] or "",
                 })
+            for r in em_rows:
+                embeddings.append({
+                    "id": int(r["id"]),
+                    "embedding": r["embedding"],
+                })
+
         finally:
             conn.close()
     else:
         qas = cache.get_qas()
+        embeddings = cache.get_embeddings()
 
-    if not qas:
+    if not qas or not embeddings:
         logger.warning("No QAs loaded in cache or DB.")
         # if bot was explicitly asked (private or mention), reply with apology
         bot_username = context.bot.username if context and context.bot else None
@@ -146,7 +155,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     mentioned = is_mentioned(update, bot_username)
 
     text = remove_mentions(text)
-    best = find_best_match(text, qas)
+    best = find_best_match(text, embeddings)
 
     if not best:
         logger.debug("Matcher returned no best result.")
@@ -160,12 +169,20 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await msg.reply_text(APOLOGY_MSG)
         return
 
-    score = int(best.get("score", 0))
-    answer = best.get("answer")
-    matched_id = best.get("id")
-    matched_q = best.get("question") or best.get("matched_q_norm")
-    category = best.get("category", "")
-    norm_question = best.get("norm_question")
+    score = best.get("score")
+    qa_id = best.get("qa_id")
+
+    qa = next((q for q in qas if q["id"] == qa_id), None)
+    if not qa:
+        row = db.get_qna_by_id()
+        if not row:
+            logger.error("No Q&A found for ID %s in cache or DB.", qa_id)
+            if mentioned:
+                await msg.reply_text(APOLOGY_MSG)
+            return
+
+    answer = qa.get("answer")
+    norm_question = qa.get("question_norm", "")
 
     threshold = MENTION_THRESHOLD if mentioned else NORMAL_THRESHOLD
 
@@ -173,7 +190,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         "Incoming message: [%s] | norm: [%s] | matched_id: %s | score: %s | threshold: %s | mentioned: %s",
         text,
         norm_question,
-        matched_id,
+        qa_id,
         score,
         threshold,
         mentioned,

@@ -5,8 +5,10 @@ Telegram FAQ Bot — Centralized Database Service (SQLite)
 
 from __future__ import annotations
 import sqlite3
-from typing import List, Optional, Tuple, Dict
+from typing import Any, List, Optional, Tuple, Dict
 from match import embed_text, load_embedding
+from normalize import normalize_ar
+from utils.calc_score import calculate_score
 import numpy as np
 
 SCHEMA_QA = """
@@ -32,9 +34,25 @@ CREATE TABLE IF NOT EXISTS unanswered (
 );
 """
 
+SCHEMA_VARIANT = """
+CREATE TABLE IF NOT EXISTS qa_variant (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qa_id INTEGER NOT NULL,
+    variant TEXT NOT NULL,
+    variant_norm TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (qa_id) REFERENCES qa(id) ON DELETE CASCADE,
+    UNIQUE (qa_id, variant_norm)
+);
+"""
+
 SCHEMA_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_qa_question_norm ON qa(question_norm)",
     "CREATE INDEX IF NOT EXISTS idx_unanswered_question_norm ON unanswered(question_norm)",
+
+    "CREATE INDEX IF NOT EXISTS idx_variant_qa ON qa_variant(qa_id);"
+    "CREATE INDEX IF NOT EXISTS idx_variant_norm ON qa_variant(variant_norm);"
 ]
 
 UNIQUE_CONSTRAINTS = [
@@ -73,21 +91,26 @@ def add_qna(conn: sqlite3.Connection, question: str, question_norm: str, answer:
     return cur.lastrowid
 
 def update_qna(conn: sqlite3.Connection, qna_id: int, field: str, value: str) -> bool:
-    if field not in {"question", "question_norm", "answer", "category"}:
+    if field not in {"question", "answer", "category"}:
         raise ValueError(f"Invalid field: {field}")
     if field == "embedding":
         raise ValueError("Embedding should not be updated directly, use 'question_norm' instead.")
     embedding = None
-    if field == "question_norm":
-        embedding = embed_text(value)
+    question_norm = None
+    if field == "question":
+        question_norm = normalize_ar(value)
+        embedding = embed_text(question_norm)
 
     cur = conn.cursor()
-    if embedding is not None:
+    if field == "question":
         cur.execute(f"""
             UPDATE qa
-            SET {field} = ?, embedding = ?, last_updated = CURRENT_TIMESTAMP
+            SET {field} = ?, question_norm = ?, embedding = ?, last_updated = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (value, embedding, qna_id))
+        """, (value, question_norm, embedding, qna_id))
+
+        cur.execute("DELETE FROM qa_variant WHERE qa_id = ?", (qna_id,))
+        #TODO: regenerate variants for the updated question
     else:
         cur.execute(f"""
             UPDATE qa
@@ -120,15 +143,13 @@ def search_qna_by_question(conn: sqlite3.Connection, search_term: str) -> List[s
 def semantic_search(conn: sqlite3.Connection, query: str, top_k: int = 1):
     query_emb = load_embedding(embed_text(query))
 
-    cur = conn.cursor()
-    cur.execute("SELECT id, question, question_norm, embedding, answer, category FROM qa")
-    rows = cur.fetchall()
+    embeddings = load_all_embeddings(conn)
+    if not embeddings:
+        return []
 
     scored = []
-    for row in rows:
-        db_emb = load_embedding(row["embedding"])
-        score = float(np.dot(query_emb, db_emb) /
-                      (np.linalg.norm(query_emb) * np.linalg.norm(db_emb)))
+    for row in embeddings:
+        score = calculate_score(query_emb, row["embedding"])
         scored.append((score, row))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -139,10 +160,36 @@ def list_all_qna(conn: sqlite3.Connection, limit: int = 30, offset_id: int = 0) 
     cur.execute("SELECT * FROM qa WHERE id > ? ORDER BY id ASC LIMIT ?", (offset_id, limit))
     return cur.fetchall()
 
-def load_qna(conn: sqlite3.Connection) -> List[Tuple[str, str]]:
+
+
+# -------------------------------
+# Variants
+# -------------------------------
+def add_variant(conn, qa_id: int, variant: str, variant_norm: str) -> int:
+    embedding = embed_text(variant_norm)
     cur = conn.cursor()
-    cur.execute("SELECT question_norm, answer FROM qa")
-    return [(row["question_norm"], row["answer"]) for row in cur.fetchall()]
+    cur.execute("""
+        INSERT OR IGNORE INTO qa_variant (qa_id, variant, variant_norm, embedding)
+        VALUES (?, ?, ?, ?)
+    """, (qa_id, variant, variant_norm, embedding))
+    conn.commit()
+    return cur.lastrowid
+
+def list_variants_for_qa(conn, qa_id: int):
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM qa_variant WHERE qa_id = ?", (qa_id,))
+    return cur.fetchall()
+
+def load_all_embeddings(conn: sqlite3.Connection) -> List[Dict[str, bytes | str]]:
+    cur = conn.cursor()
+    cur.execute("SELECT id, embedding FROM qa")
+    
+    res = [{'id': row['id'], 'embedding': load_embedding(row['embedding'])} for row in cur.fetchall()]
+
+    cur.execute("SELECT qa_id, embedding FROM qa_variant")
+    res.extend([{'id': row['qa_id'], 'embedding': load_embedding(row['embedding'])} for row in cur.fetchall()])
+
+    return res
 
 # -------------------------------
 # Unanswered Questions

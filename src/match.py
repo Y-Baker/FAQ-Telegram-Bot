@@ -17,10 +17,7 @@ from normalize import normalize_ar
 # load .env if present
 load_dotenv()
 
-MENTION_THRESHOLD = int(os.getenv("MENTION_THRESHOLD", "70"))
-NORMAL_THRESHOLD = int(os.getenv("NORMAL_THRESHOLD", "80"))
-
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 def embed_text(text: str) -> List[bytes]:
     """
@@ -81,3 +78,10 @@ def find_best_match(user_question: str, qas: List[Any]) -> Optional[Dict[str, An
         }
     
     return best_match
+
+# embeddings = np.vstack([load_embedding(item["embedding"]) for item in qas])
+# scores = np.dot(embeddings, user_embedding) / (
+#     np.linalg.norm(embeddings, axis=1) * np.linalg.norm(user_embedding)
+# )
+# best_idx = np.argmax(scores)
+# best_score = scores[best_idx]

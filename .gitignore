@@ -1,4 +1,7 @@
 .env/
+venv/
+models/
 __pycache__/
 .env
 faq.db
+.idea

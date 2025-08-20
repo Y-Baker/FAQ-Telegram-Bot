@@ -26,6 +26,16 @@ services:
       timeout: 5s
       retries: 3
 
+  init:
+    build: .
+    image: faq-bot-init:latest
+    command: ["python", "src/cli.py", "--db", "/app/data/faq.db", "--init"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+
   migrate:
     build: .
     image: faq-bot-migrate:latest

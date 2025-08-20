@@ -17,7 +17,8 @@ from normalize import normalize_ar
 # load .env if present
 load_dotenv()
 
-model = SentenceTransformer("./models/all-MiniLM-L6-v2")
+model_name = os.getenv("NLP_MODEL_NAME", "all-MiniLM-L6-v2")
+model = SentenceTransformer("./models/" + model_name)
 
 def embed_text(text: str) -> List[bytes]:
     """

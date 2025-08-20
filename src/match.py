@@ -21,6 +21,9 @@ load_dotenv()
 model_name = os.getenv("NLP_MODEL_NAME", "all-MiniLM-L6-v2")
 model = SentenceTransformer("./models/" + model_name)
 
+def embed_vector(text: str) -> np.ndarray:
+    return model.encode([text])[0]
+
 def embed_text(text: str) -> List[bytes]:
     """
     Convert text to embedding using SentenceTransformer.
@@ -29,10 +32,19 @@ def embed_text(text: str) -> List[bytes]:
     if not text:
         return []
     
-    embedding =  model.encode([text])[0]
+    embedding =  embed_vector(text)
     return pickle.dumps(embedding)
 
-def load_embedding(blob: bytes) -> np.ndarray:
+def load_embedding(blob: Any) -> np.ndarray:
+    if blob is None:
+        return np.array([])
+
+    if isinstance(blob, memoryview) or isinstance(blob, bytearray):
+        blob = bytes(blob)
+    
+    if isinstance(blob, str):
+        raise ValueError("Expected bytes, got str")
+
     return pickle.loads(blob)
 
 def find_best_match(user_question: str, embedding: List[Any]) -> Optional[Dict[str, Any]]:
@@ -54,7 +66,7 @@ def find_best_match(user_question: str, embedding: List[Any]) -> Optional[Dict[s
     best_score = scores[best_idx, :]
 
     best_match = {
-        "id": int(best_score[0]),
+        "qa_id": int(best_score[0]),
         "score": float(best_score[1]),
     }
     

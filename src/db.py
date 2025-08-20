@@ -6,7 +6,7 @@ Telegram FAQ Bot — Centralized Database Service (SQLite)
 from __future__ import annotations
 import sqlite3
 from typing import Any, List, Optional, Tuple, Dict
-from match import embed_text, load_embedding
+from match import embed_text, load_embedding, embed_vector
 from normalize import normalize_ar
 from utils.calc_score import calculate_score
 import numpy as np
@@ -51,8 +51,8 @@ SCHEMA_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_qa_question_norm ON qa(question_norm)",
     "CREATE INDEX IF NOT EXISTS idx_unanswered_question_norm ON unanswered(question_norm)",
 
-    "CREATE INDEX IF NOT EXISTS idx_variant_qa ON qa_variant(qa_id);"
-    "CREATE INDEX IF NOT EXISTS idx_variant_norm ON qa_variant(variant_norm);"
+    "CREATE INDEX IF NOT EXISTS idx_variant_qa ON qa_variant(qa_id)",
+    "CREATE INDEX IF NOT EXISTS idx_variant_norm ON qa_variant(variant_norm)",
 ]
 
 UNIQUE_CONSTRAINTS = [
@@ -71,6 +71,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(SCHEMA_QA)
     cur.execute(SCHEMA_UNANSWERED)
+    cur.execute(SCHEMA_VARIANT)
     for stmt in SCHEMA_INDEXES:
         cur.execute(stmt)
     for stmt in UNIQUE_CONSTRAINTS:
@@ -141,7 +142,9 @@ def search_qna_by_question(conn: sqlite3.Connection, search_term: str) -> List[s
     return cur.fetchall()
 
 def semantic_search(conn: sqlite3.Connection, query: str, top_k: int = 1):
-    query_emb = load_embedding(embed_text(query))
+    query_emb = embed_vector(query)
+    if query_emb is None or len(query_emb) == 0:
+        return []
 
     embeddings = load_all_embeddings(conn)
     if not embeddings:

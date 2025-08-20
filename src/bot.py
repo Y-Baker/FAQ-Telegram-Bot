@@ -124,6 +124,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "id": int(r["id"]),
                     "question": r["question"],
                     "question_norm": r["question_norm"],
+                    "embedding": r["embedding"],
                     "answer": r["answer"],
                     "category": r["category"] or "",
                 })
@@ -195,7 +196,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_admin_private(update):
         admin_kb = ReplyKeyboardMarkup(
-            "/admin",
+            [["/admin"]],
             one_time_keyboard=True,
             resize_keyboard=True,
         )

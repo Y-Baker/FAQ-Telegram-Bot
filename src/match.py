@@ -17,7 +17,7 @@ from normalize import normalize_ar
 # load .env if present
 load_dotenv()
 
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+model = SentenceTransformer("./models/all-MiniLM-L6-v2")
 
 def embed_text(text: str) -> List[bytes]:
     """

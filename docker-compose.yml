@@ -17,6 +17,8 @@ services:
       - APOLOGY_MSG=${APOLOGY_MSG}
     volumes:
       - ./data:/app/data
+      - ./models:/app/models
+      - ./hf_cache:/root/.cache/huggingface
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "pgrep", "-f", "src/bot.py"]
@@ -34,3 +36,14 @@ services:
       - ./data:/app/data
     restart: "no"
 
+  nlp:
+    build: .
+    image: faq-bot-nlp:latest
+    command: ["python", "src/cli.py", "--nlp"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./hf_cache:/root/.cache/huggingface
+    restart: "no"

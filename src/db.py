@@ -186,11 +186,18 @@ def load_all_embeddings(conn: sqlite3.Connection) -> List[Dict[str, bytes | str]
         "category": row["category"],
     } for row in cur.fetchall()]
 
-    cur.execute("SELECT qa_id, variant_norm, embedding, qa.category FROM qa_variant INNER JOIN qa ON qa.id = qa_variant.qa_id WHERE embedding IS NOT NULL")
+    cur.execute("""
+        SELECT qa_v.qa_id, qa_v.variant_norm, qa_v.embedding, qa.category 
+        FROM qa_variant AS qa_v
+        INNER JOIN qa ON qa.id = qa_v.qa_id 
+        WHERE qa_v.embedding IS NOT NULL
+    """)
+    
     res.extend([{
         "qa_id": row["qa_id"],
         "question_norm": row["variant_norm"],
         "embedding": row["embedding"],
+        "category": row["category"],
     } for row in cur.fetchall()])
 
     return res

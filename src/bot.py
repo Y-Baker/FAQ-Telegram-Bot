@@ -131,7 +131,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             embeddings = []
             for r in q_rows:
                 qas.append({
-                    "id": int(r["id"]),
+                    "qa_id": int(r["id"]),
                     "question": r["question"],
                     "question_norm": r["question_norm"],
                     "embedding": r["embedding"],
@@ -142,6 +142,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 embeddings.append({
                     "qa_id": int(r["qa_id"]),
                     "embedding": r["embedding"],
+                    "question_norm": r["question_norm"],
+                    "category": r["category"] or "",
                 })
 
         finally:
@@ -163,7 +165,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     mentioned = is_mentioned(update, bot_username)
 
     text = remove_mentions(text)
-    best = find_best_match(text, qas)
+    best = find_best_match(text, embeddings)
 
     if not best:
         logger.debug("Matcher returned no best result.")
@@ -180,7 +182,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     score = best.get("score")
     qa_id = best.get("qa_id")
 
-    qa = next((q for q in qas if q["id"] == qa_id), None)
+    qa = next((q for q in qas if q["qa_id"] == qa_id), None)
     if not qa:
         row = db.get_qna_by_id()
         if not row:

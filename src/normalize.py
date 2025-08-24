@@ -25,6 +25,9 @@ class ArabicNormalizer:
             u"\U000024C2-\U0001F251"
             "]+", flags=re.UNICODE)
         
+        # Pattern to replace 'لل' at the beginning of words with 'ال'
+        self._lil_prefix = re.compile(r'\bلل(\w+)')
+        
         # Arabic to Western digits
         self._ar_digits = {ord(a): ord(w) for a, w in zip("٠١٢٣٤٥٦٧٨٩", "0123456789")}
         
@@ -135,6 +138,9 @@ class ArabicNormalizer:
         
         # Remove punctuation
         s = self._punctuation.sub(" ", s)
+        
+        # Replace 'لل' at the beginning of words with 'ال'
+        s = self._lil_prefix.sub(r'ال\1', s)
         
         # Normalize characters
         s = s.translate(self._char_map)

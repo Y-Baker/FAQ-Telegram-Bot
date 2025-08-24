@@ -32,7 +32,7 @@ class QACache:
             qas = []
             for r in rows:
                 qas.append({
-                    "id": int(r["id"]),
+                    "qa_id": int(r["id"]),
                     "question": r["question"],
                     "question_norm": r["question_norm"],
                     "embedding": r["embedding"],
@@ -56,6 +56,8 @@ class QACache:
                 embeddings.append({
                     "qa_id": int(r["qa_id"]),
                     "embedding": r["embedding"],
+                    "question_norm": r["question_norm"],
+                    "category": r["category"] or "",
                 })
             return embeddings
         finally:

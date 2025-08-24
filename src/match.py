@@ -58,40 +58,10 @@ def load_embedding(blob: Any) -> np.ndarray:
 
     return pickle.loads(blob)
 
-# def find_best_embedding_match(user_question: str, embedding: List[Any]) -> Optional[Dict[str, Any]]:
-#     """
-#     Find the best matching answer for a user question from the provided embeddings.
-#     embedding {'id': int, 'embedding': 'loaded_embedding'}
-#     """
-#     if not embedding or not user_question:
-#         return None
-    
-#     user_norm = normalize_ar(user_question)
-#     user_embedding = embed_vector(user_norm)
-#     user_category, user_category_conf = predict_category(user_norm, is_normalized=True)
-    
-#     best_score = -1.0
-#     best_qa_id = None
-
-#     for row in embedding:
-#         emb = row.get("embedding")
-#         if emb is not None and len(emb) > 0:
-#             score = calculate_score(user_embedding, emb, user_norm, "", exact=True, prefix=True)
-#             if score > best_score:
-#                 best_score = score
-#                 best_qa_id = row.get("qa_id")
-
-#     if best_qa_id is not None:
-#         return {
-#             "qa_id": int(best_qa_id),
-#             "score": best_score,
-#         }
-#     return None
-
-def find_best_match(user_question: str, qas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def find_best_match(user_question: str, qas: List[Dict[str, Any]], is_loaded: bool=False) -> Optional[Dict[str, Any]]:
     """
     Find the best matching answer for a user question from the provided Q&A pairs.
-    qas [{'id': int, 'question': str, 'question_norm': str, 'embedding': bytes, 'answer': str, 'category': str}]
+    qas [{'qa_id': int, 'question_norm': str, 'embedding': bytes, 'category': str}]
     """
     if not qas or not user_question:
         return None
@@ -105,13 +75,16 @@ def find_best_match(user_question: str, qas: List[Dict[str, Any]]) -> Optional[D
     best_qa_id = None
 
     for qa in qas:
-        emb = load_embedding(qa.get("embedding"))
+        if is_loaded:
+            emb = qa.get("embedding", np.array([]))
+        else:
+            emb = load_embedding(qa.get("embedding"))
         if emb is not None and len(emb) > 0:
             score = calculate_score(
                 user_embedding, 
                 emb, 
                 user_norm, 
-                qa.get("question_norm", qa.get("question")),
+                qa.get("question_norm", ""),
                 user_category=user_category,
                 user_category_conf=user_category_conf,
                 qa_category=qa.get("category"),
@@ -120,7 +93,7 @@ def find_best_match(user_question: str, qas: List[Dict[str, Any]]) -> Optional[D
             )
             if score > best_score:
                 best_score = score
-                best_qa_id = qa.get("id")
+                best_qa_id = qa.get("qa_id")
     
     if best_qa_id is not None:
         return {
@@ -147,7 +120,7 @@ def leave_one_out_eval(qas: List[Dict[str, Any]], top_k: int = 1) -> Dict[str, f
         if not top:
             continue
         scores_top.append(top["score"])
-        if top["qa_id"] == qa["id"]:
+        if top["qa_id"] == qa["qa_id"]:
             correct_at_1 += 1
 
     acc1 = correct_at_1 / n
@@ -157,8 +130,8 @@ def leave_one_out_eval(qas: List[Dict[str, Any]], top_k: int = 1) -> Dict[str, f
 
 if __name__ == "__main__":
     qas = [
-        {"id": 1, "question": "إزاي أسجل في التربية العسكرية؟", "answer": "تسجيل عبر بوابة ..."},
-        {"id": 2, "question": "ما هي ورق التسجيل؟", "answer": "تحتاج صورة البطاقة..."},
+        {"qa_id": 1, "question": "إزاي أسجل في التربية العسكرية؟", "answer": "تسجيل عبر بوابة ..."},
+        {"qa_id": 2, "question": "ما هي ورق التسجيل؟", "answer": "تحتاج صورة البطاقة..."},
         # add your ~25 QAs here...
     ]
     print("Prepared index with", len(qas))

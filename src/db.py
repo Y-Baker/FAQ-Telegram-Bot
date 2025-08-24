@@ -6,7 +6,7 @@ Telegram FAQ Bot — Centralized Database Service (SQLite)
 from __future__ import annotations
 import sqlite3
 from typing import Any, List, Optional, Tuple, Dict
-from match import embed_text, load_embedding, embed_vector
+from match import embed_text, embed_vector
 from normalize import normalize_ar
 from utils.calc_score import calculate_score
 import numpy as np
@@ -151,23 +151,6 @@ def search_qna_by_question(conn: sqlite3.Connection, search_term: str) -> List[s
     """, (f"%{search_term}%", f"%{search_term}%"))
     return cur.fetchall()
 
-def semantic_search(conn: sqlite3.Connection, query: str, top_k: int = 1):
-    query_emb = embed_vector(query)
-    if query_emb is None or len(query_emb) == 0:
-        return []
-
-    embeddings = load_all_embeddings(conn)
-    if not embeddings:
-        return []
-
-    scored = []
-    for row in embeddings:
-        score = calculate_score(query_emb, row["embedding"])
-        scored.append((score, row))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[:top_k]
-
 def list_all_qna(conn: sqlite3.Connection, limit: int = 30, offset_id: int = 0) -> List[sqlite3.Row]:
     cur = conn.cursor()
     cur.execute("SELECT * FROM qa WHERE id > ? ORDER BY id ASC LIMIT ?", (offset_id, limit))
@@ -195,18 +178,19 @@ def list_variants_for_qa(conn, qa_id: int):
 
 def load_all_embeddings(conn: sqlite3.Connection) -> List[Dict[str, bytes | str]]:
     cur = conn.cursor()
-    cur.execute("SELECT id AS qa_id, question_norm, embedding FROM qa")
+    cur.execute("SELECT id AS qa_id, question_norm, category, embedding FROM qa WHERE embedding IS NOT NULL")
     res = [{
         "qa_id": row["qa_id"],
-        "norm": row["question_norm"],
-        "embedding": load_embedding(row["embedding"]),
+        "question_norm": row["question_norm"],
+        "embedding": row["embedding"],
+        "category": row["category"],
     } for row in cur.fetchall()]
 
-    cur.execute("SELECT qa_id, variant_norm, embedding FROM qa_variant")
+    cur.execute("SELECT qa_id, variant_norm, embedding, qa.category FROM qa_variant INNER JOIN qa ON qa.id = qa_variant.qa_id WHERE embedding IS NOT NULL")
     res.extend([{
         "qa_id": row["qa_id"],
-        "norm": row["variant_norm"],
-        "embedding": load_embedding(row["embedding"]),
+        "question_norm": row["variant_norm"],
+        "embedding": row["embedding"],
     } for row in cur.fetchall()])
 
     return res

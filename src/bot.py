@@ -270,23 +270,21 @@ def main():
         db.init_db(conn)
     finally:
         conn.close()
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # cache = QACache(DB_PATH, ttl=QA_CACHE_TTL)
+    # # Eagerly load cache once to surface DB errors early
+    # try:
+    #     cache.force_reload()
+    # except Exception:
+    #     logger.exception("Failed to eager-load QACache on startup; continuing (will retry lazily).")
 
-    cache = QACache(DB_PATH, ttl=QA_CACHE_TTL)
-    # Eagerly load cache once to surface DB errors early
-    try:
-        cache.force_reload()
-    except Exception:
-        logger.exception("Failed to eager-load QACache on startup; continuing (will retry lazily).")
+    # # Optionally start auto-refresh
+    # if QA_CACHE_AUTO_REFRESH:
+    #     cache.start_auto_refresh(QA_CACHE_AUTO_INTERVAL)
+    #     logger.info("QACache auto-refresh enabled (interval=%s s).", QA_CACHE_AUTO_INTERVAL)
 
-    # Optionally start auto-refresh
-    if QA_CACHE_AUTO_REFRESH:
-        cache.start_auto_refresh(QA_CACHE_AUTO_INTERVAL)
-        logger.info("QACache auto-refresh enabled (interval=%s s).", QA_CACHE_AUTO_INTERVAL)
-
-    # store cache in app.bot_data so handlers & commands can access it
-    app.bot_data["qa_cache"] = cache
+    # # store cache in app.bot_data so handlers & commands can access it
+    # app.bot_data["qa_cache"] = cache
 
     # Register admin command handlers (they will use db functions and should invalidate cache after mutations)
     register_command_handlers(app)
@@ -302,6 +300,7 @@ def main():
 
     # Start polling
     logger.info("Starting bot …")
+    print("Bot started. Press Ctrl+C to stop.")
     app.run_polling()
 
 

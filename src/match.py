@@ -11,26 +11,29 @@ from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 import pickle
 import numpy as np
-from functools import lru_cache
 import logging
 
 from normalize import normalize_ar
-from utils.calc_score import calculate_scores, calculate_score
+from utils.calc_score import calculate_score
+from category_predictor import predict_category
 
 # load .env if present
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-@lru_cache(maxsize=1)
-def get_model():
-    model_name = os.getenv("NLP_MODEL_NAME", "paraphrase-multilingual-MiniLM-L12-v2")
-    logging.info(f"Loading NLP: {model_name}")
-    return SentenceTransformer(f"./models/{model_name}")
 
-model = get_model()
+model = None
+def get_model():
+    global model
+    if model is None:
+        model_name = os.getenv("NLP_MODEL_NAME", "intfloat/multilingual-e5-large")
+        logging.info(f"Loading NLP: {model_name}")
+        model = SentenceTransformer(f"./models/{model_name}")
+    return model
 
 def embed_vector(text: str) -> np.ndarray:
-    return model.encode([text])[0]
+    m = get_model()
+    return m.encode([text])[0]
 
 def embed_text(text: str) -> List[bytes]:
     """
@@ -55,30 +58,35 @@ def load_embedding(blob: Any) -> np.ndarray:
 
     return pickle.loads(blob)
 
-def find_best_embedding_match(user_question: str, embedding: List[Any]) -> Optional[Dict[str, Any]]:
-    """
-    Find the best matching answer for a user question from the provided embeddings.
-    embedding {'id': int, 'embedding': 'loaded_embedding'}
-    """
-    if not embedding or not user_question:
-        return None
+# def find_best_embedding_match(user_question: str, embedding: List[Any]) -> Optional[Dict[str, Any]]:
+#     """
+#     Find the best matching answer for a user question from the provided embeddings.
+#     embedding {'id': int, 'embedding': 'loaded_embedding'}
+#     """
+#     if not embedding or not user_question:
+#         return None
     
-    user_norm = normalize_ar(user_question)
-    user_embedding = model.encode([user_norm])[0]
+#     user_norm = normalize_ar(user_question)
+#     user_embedding = embed_vector(user_norm)
+#     user_category, user_category_conf = predict_category(user_norm, is_normalized=True)
     
-    scores = calculate_scores(user_embedding, embedding)
-    if scores is None or len(scores) == 0:
-        return None
+#     best_score = -1.0
+#     best_qa_id = None
 
-    best_idx = np.argmax(scores[:, 1])
-    best_score = scores[best_idx, :]
+#     for row in embedding:
+#         emb = row.get("embedding")
+#         if emb is not None and len(emb) > 0:
+#             score = calculate_score(user_embedding, emb, user_norm, "", exact=True, prefix=True)
+#             if score > best_score:
+#                 best_score = score
+#                 best_qa_id = row.get("qa_id")
 
-    best_match = {
-        "qa_id": int(best_score[0]),
-        "score": float(best_score[1]),
-    }
-    
-    return best_match
+#     if best_qa_id is not None:
+#         return {
+#             "qa_id": int(best_qa_id),
+#             "score": best_score,
+#         }
+#     return None
 
 def find_best_match(user_question: str, qas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
@@ -89,15 +97,27 @@ def find_best_match(user_question: str, qas: List[Dict[str, Any]]) -> Optional[D
         return None
     
     user_norm = normalize_ar(user_question)
-    user_embedding = model.encode([user_norm])[0]
-    
+    user_embedding = embed_vector(user_norm)
+    user_category, user_category_conf = predict_category(user_norm, is_normalized=True)
+    logger.info(f"User question category: {user_category} (conf {user_category_conf})")
+
     best_score = -1.0
     best_qa_id = None
 
     for qa in qas:
         emb = load_embedding(qa.get("embedding"))
         if emb is not None and len(emb) > 0:
-            score = calculate_score(user_embedding, emb, user_norm, qa.get("question_norm", qa.get("question")), exact=True, prefix=True)
+            score = calculate_score(
+                user_embedding, 
+                emb, 
+                user_norm, 
+                qa.get("question_norm", qa.get("question")),
+                user_category=user_category,
+                user_category_conf=user_category_conf,
+                qa_category=qa.get("category"),
+                exact=True,
+                prefix=True,
+            )
             if score > best_score:
                 best_score = score
                 best_qa_id = qa.get("id")
@@ -108,3 +128,40 @@ def find_best_match(user_question: str, qas: List[Dict[str, Any]]) -> Optional[D
             "score": best_score,
         }
     return None
+
+def leave_one_out_eval(qas: List[Dict[str, Any]], top_k: int = 1) -> Dict[str, float]:
+    """
+    For each QA, use its question as a query against the index excluding itself.
+    Compute retrieval accuracy@k and mean score for top hit.
+    """
+    n = len(qas)
+    if n <= 1:
+        return {"n": n, "accuracy@1": 0.0}
+
+    correct_at_1 = 0
+    scores_top = []
+    for i, qa in enumerate(qas):
+        # build temporary index without qa[i]
+        temp_index = [q for j,q in enumerate(qas) if j != i]
+        top = find_best_match(qa["question"], temp_index)
+        if not top:
+            continue
+        scores_top.append(top["score"])
+        if top["qa_id"] == qa["id"]:
+            correct_at_1 += 1
+
+    acc1 = correct_at_1 / n
+    mean_top_score = float(np.mean(scores_top)) if scores_top else 0.0
+    return {"n": n, "accuracy@1": acc1, "mean_top_score": mean_top_score}
+
+
+if __name__ == "__main__":
+    qas = [
+        {"id": 1, "question": "إزاي أسجل في التربية العسكرية؟", "answer": "تسجيل عبر بوابة ..."},
+        {"id": 2, "question": "ما هي ورق التسجيل؟", "answer": "تحتاج صورة البطاقة..."},
+        # add your ~25 QAs here...
+    ]
+    print("Prepared index with", len(qas))
+    print("LOO eval:", leave_one_out_eval(qas))
+    # test query
+    print(find_best_match("فين أسجل التربية العسكرية؟", qas))

@@ -15,3 +15,4 @@ typing_extensions==4.14.1
 numpy==2.2.6
 sentence-transformers==3.2.1
 RapidFuzz==3.13.0
+datasets==4.0.0

@@ -8,7 +8,7 @@ import os
 
 from sentence_transformers import SentenceTransformer
 
-def download_model(model_name: str = "all-MiniLM-L6-v2") -> None:
+def download_model(model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
     """
     Download and save the SentenceTransformer model to a local directory.
     This is useful for offline usage or to avoid downloading it every time.
@@ -19,9 +19,12 @@ def download_model(model_name: str = "all-MiniLM-L6-v2") -> None:
     # Ensure the model directory exists
     if not os.path.exists("./models/" + model_name):
         print(f"Downloading model '{model_name}'...")
+    else:
+        print(f"Model '{model_name}' already exists. Skipping download.")
+        return
 
     # Download and save locally
-    model = SentenceTransformer("sentence-transformers/" + model_name)
+    model = SentenceTransformer(model_name)
     path = "./models/" + model_name
     model.save(path)
     print("Model downloaded and saved to ", path)

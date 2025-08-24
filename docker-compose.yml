@@ -1,7 +1,7 @@
-version: "3.8"
 services:
   faq-bot:
     build: .
+    image: faq-bot:latest
     container_name: faq-bot
     env_file:
       - .env
@@ -15,20 +15,22 @@ services:
       - QA_CACHE_AUTO_REFRESH=${QA_CACHE_AUTO_REFRESH:-false}
       - QA_CACHE_AUTO_INTERVAL=${QA_CACHE_AUTO_INTERVAL:-120}
       - APOLOGY_MSG=${APOLOGY_MSG}
+      - NLP_MODEL_NAME=${NLP_MODEL_NAME:-paraphrase-multilingual-MiniLM-L12-v2}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
     volumes:
       - ./data:/app/data
       - ./models:/app/models
       - ./hf_cache:/root/.cache/huggingface
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "src/bot.py"]
+      test: ["CMD-SHELL", "pgrep -f src/bot.py >/dev/null || exit 1"]
       interval: 60s
-      timeout: 5s
+      timeout: 10s
       retries: 3
 
   init:
-    build: .
-    image: faq-bot-init:latest
+    image: faq-bot:latest
     command: ["python", "src/cli.py", "--db", "/app/data/faq.db", "--init"]
     env_file:
       - .env
@@ -37,9 +39,8 @@ services:
     restart: "no"
 
   migrate:
-    build: .
-    image: faq-bot-migrate:latest
-    command: ["python", "src/cli.py", "--db", "/app/data/faq.db", "--migrate", "/app/data/qa.json"]
+    image: faq-bot:latest
+    command: ["python", "src/cli.py", "--db", "/app/data/faq.db", "--migrate", "/app/data/qa.json", "/app/data/paraphrases.json"]
     env_file:
       - .env
     volumes:
@@ -47,13 +48,11 @@ services:
     restart: "no"
 
   nlp:
-    build: .
-    image: faq-bot-nlp:latest
+    image: faq-bot:latest
     command: ["python", "src/cli.py", "--nlp"]
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
       - ./models:/app/models
       - ./hf_cache:/root/.cache/huggingface
     restart: "no"

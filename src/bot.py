@@ -30,7 +30,15 @@ from match import find_best_match  # returns dict with score, answer, id, ...
 from dotenv import load_dotenv
 
 # --- Logging ---
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ],
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
 # --- Configuration from env ---
@@ -132,7 +140,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 })
             for r in em_rows:
                 embeddings.append({
-                    "id": int(r["id"]),
+                    "qa_id": int(r["qa_id"]),
                     "embedding": r["embedding"],
                 })
 
@@ -155,7 +163,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     mentioned = is_mentioned(update, bot_username)
 
     text = remove_mentions(text)
-    best = find_best_match(text, embeddings)
+    best = find_best_match(text, qas)
 
     if not best:
         logger.debug("Matcher returned no best result.")

@@ -193,7 +193,7 @@ async def lookup_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"👤 *User Info*\n"
             f"*ID:* `{user.id}`\n"
-            f"*Username:* @{user.username or '—'}\n"
+            f"*Username:* @{escape_markdown_v2(user.username or '—')}\n"
             f"*First Name:* {escape_markdown_v2(user.first_name or '—')}\n"
             f"*Last Name:* {escape_markdown_v2(user.last_name or '—')}"
         )
@@ -365,14 +365,14 @@ async def add_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     question = context.user_data.get("add_question")
     answer = context.user_data.get("add_answer")
-    category_value = Category[cat_name].value if cat_name in Category.__members__ else Category.GENERAL.value
+    category_value = Category[cat_name].name if cat_name in Category.__members__ else Category.GENERAL.value
 
     qna_id = insert_qna(question, answer, category_value)
     
-    # Invalidate the cache after a mutation
+    # update the cache after a mutation
     qa_cache = context.application.bot_data.get("qa_cache")
     if qa_cache:
-        qa_cache.invalidate()
+        qa_cache.force_reload()
         
     await update.callback_query.edit_message_text(f"تمت الإضافة بنجاح ✅\n**ID: {qna_id}**", parse_mode='Markdown')
     # clear temporary data
@@ -466,7 +466,7 @@ async def update_qna_receive_value(update: Update, context: ContextTypes.DEFAULT
     if ok:
         qa_cache = context.application.bot_data.get("qa_cache")
         if qa_cache:
-            qa_cache.invalidate()
+            qa_cache.force_reload()
         await update.message.reply_text(f"تم التحديث بنجاح ✅", reply_markup=ReplyKeyboardRemove())
     else:
         await update.message.reply_text("لم يتم العثور على العنصر أو لم يحدث تغيير. ❌", reply_markup=ReplyKeyboardRemove())
@@ -491,7 +491,7 @@ async def update_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_T
     if ok:
         qa_cache = context.application.bot_data.get("qa_cache")
         if qa_cache:
-            qa_cache.invalidate()
+            qa_cache.force_reload()
         await update.callback_query.edit_message_text(f"تم التحديث بنجاح ✅")
     else:
         await update.callback_query.edit_message_text("فشل التحديث أو العنصر غير موجود. ❌")
@@ -573,7 +573,7 @@ async def delete_qna_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TY
         if ok:
             qa_cache = context.application.bot_data.get("qa_cache")
             if qa_cache:
-                qa_cache.invalidate()
+                qa_cache.force_reload()
             await update.callback_query.edit_message_text("تم الحذف بنجاح ✅")
         else:
             await update.callback_query.edit_message_text("لم يتم العثور على العنصر. ❌")

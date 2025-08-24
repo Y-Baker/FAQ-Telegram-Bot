@@ -5,8 +5,6 @@ Telegram FAQ Bot — CLI Utilities For Database Management
 
 import argparse
 import os
-from db import connect, init_db
-from seed import migrate_qa, migrate_variants
 
 from sentence_transformers import SentenceTransformer
 
@@ -44,17 +42,34 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    # If neither --init nor --migrate nor --nlp is specified, show help
+    if not args.init and not args.migrate and not args.nlp:
+        print("No action specified. Use --init or --migrate or --nlp. See --help for options.")
+        return
+
+    if args.nlp:
+        download_model(args.nlp)
+        print(f"NLP model '{args.nlp}' initialized.")
+
+    from db import connect, init_db
+    from seed import migrate_qa, migrate_variants
+
     db_path = args.db
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-    conn = connect(db_path)
+    conn = None
 
     # Initialize database schema if requested
     if args.init:
+        if conn is None:
+            conn = connect(db_path)
         init_db(conn)
         print(f"Initialized schema in {db_path}.")
 
     # Migrate Q&A data if requested
     if args.migrate:
+        if conn is None:
+            conn = connect(db_path)
         if len(args.migrate) != 2:
             print("Error: --migrate requires two arguments: <qa.json> <paraphrases.json>")
             return
@@ -68,15 +83,6 @@ def main() -> None:
         inserted = migrate_variants(conn, paraphrases_json)
         print(f"Inserted/updated paraphrases from {paraphrases_json}: {inserted} new rows.")
         print("Migration completed successfully.")
-
-
-    if args.nlp:
-        download_model(args.nlp)
-        print(f"NLP model '{args.nlp}' initialized.")
-
-    # If neither --init nor --migrate nor --nlp is specified, show help
-    if not args.init and not args.migrate and not args.nlp:
-        print("No action specified. Use --init or --migrate or --nlp. See --help for options.")
 
 
 if __name__ == "__main__":

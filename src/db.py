@@ -195,12 +195,19 @@ def list_variants_for_qa(conn, qa_id: int):
 
 def load_all_embeddings(conn: sqlite3.Connection) -> List[Dict[str, bytes | str]]:
     cur = conn.cursor()
-    cur.execute("SELECT id, embedding FROM qa")
-    
-    res = [{'id': row['id'], 'embedding': load_embedding(row['embedding'])} for row in cur.fetchall()]
+    cur.execute("SELECT id AS qa_id, question_norm, embedding FROM qa")
+    res = [{
+        "qa_id": row["qa_id"],
+        "norm": row["question_norm"],
+        "embedding": load_embedding(row["embedding"]),
+    } for row in cur.fetchall()]
 
-    cur.execute("SELECT qa_id, embedding FROM qa_variant")
-    res.extend([{'id': row['qa_id'], 'embedding': load_embedding(row['embedding'])} for row in cur.fetchall()])
+    cur.execute("SELECT qa_id, variant_norm, embedding FROM qa_variant")
+    res.extend([{
+        "qa_id": row["qa_id"],
+        "norm": row["variant_norm"],
+        "embedding": load_embedding(row["embedding"]),
+    } for row in cur.fetchall()])
 
     return res
 

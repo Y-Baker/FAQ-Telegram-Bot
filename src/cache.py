@@ -54,7 +54,7 @@ class QACache:
             embeddings = []
             for r in rows:
                 embeddings.append({
-                    "id": int(r["id"]),
+                    "qa_id": int(r["qa_id"]),
                     "embedding": r["embedding"],
                 })
             return embeddings
@@ -98,7 +98,8 @@ class QACache:
         with self._lock:
             logger.debug("QACache: invalidated by external request.")
             self._last_loaded = 0
-            # keep current _qas until next reload
+            self._qas = []
+            self._embeddings = []
 
     def force_reload(self) -> None:
         """Force immediate reload from DB."""

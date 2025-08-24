@@ -19,3 +19,7 @@ class Category(Enum):
             if cat.name.lower() == category.lower():
                 return cat.value
         return None
+    
+    @classmethod
+    def predict_category(q: str):
+        pass

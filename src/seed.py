@@ -65,7 +65,11 @@ def migrate_qa(conn: sqlite3.Connection, json_path: str) -> int:
         if not qn:
             raise ValueError(f"Item #{i} has an empty normalized question.")
         
-        re = add_qna(conn, q, qn, a, c)
+        try:
+            re = add_qna(conn, q, qn, a, c)
+        except sqlite3.IntegrityError:
+            re = None
+
         if re:
             inserted += 1
             print(f"Inserted/updated item #{i}: {q} -> {a} (category: {c})")

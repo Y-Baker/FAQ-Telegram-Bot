@@ -5,8 +5,15 @@ Telegram FAQ Bot — Score Calculation Utilities
 
 from typing import Dict, Any, List
 import numpy as np
+from rapidfuzz import fuzz
 
-def calculate_score(user_embedding: np.ndarray, qa_embedding: np.ndarray) -> float:
+def _cos(a, b):
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0:
+        return 0.0
+    return float(np.dot(a, b) / denom) 
+
+def calculate_score(user_embedding: np.ndarray, qa_embedding: np.ndarray, user_normalize: str, qa_normalize: str, exact: bool=False, prefix: bool=False) -> float:
     """
     Calculate the similarity score between user query embedding and Q&A embedding.
     Returns a score between 0 and 100.
@@ -14,9 +21,18 @@ def calculate_score(user_embedding: np.ndarray, qa_embedding: np.ndarray) -> flo
     if user_embedding is None or qa_embedding is None:
         return 0.0
     
-    # Calculate cosine similarity
-    score = np.dot(user_embedding, qa_embedding) / (np.linalg.norm(user_embedding) * np.linalg.norm(qa_embedding))
-    
+    c = _cos(user_embedding, qa_embedding)
+    c01 = (c + 1.0) / 2.0 # Scale cosine from [-1,1] to [0,1]
+
+    tf = fuzz.token_set_ratio(user_normalize, qa_normalize) / 100.0
+
+    score = 0.65 * c01 + 0.35 * tf
+
+    if exact and user_normalize == qa_normalize:
+        score = max(score, 0.99)
+    elif prefix and qa_normalize.startswith(user_normalize):
+        score = max(score, 0.90)
+
     # Scale to percentage
     return max(0.0, min(100.0, score * 100))
 

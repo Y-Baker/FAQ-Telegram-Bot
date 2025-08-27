@@ -219,11 +219,7 @@ async def categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /list_qas command (admin private only)
 # -----------------------
 async def list_qas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
-        await update.message.reply_text("هذا الأمر متاح للمشرفين فقط.")
-        return
-
-    rows = list_qas(limit=30)
+    rows = list_qas()
     if not rows:
         await update.message.reply_text("لا توجد أسئلة مخزنة حالياً. ℹ️")
         return

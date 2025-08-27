@@ -232,6 +232,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "للمشرفين: استخدم /admin لإدارة الأسئلة.",
             reply_markup=admin_kb
         )
+    else:
+        user_kb = ReplyKeyboardMarkup(
+            [["/list_qas", "/get_qna"]],
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+        await update.message.reply_text(
+            reply_markup=user_kb
+        )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (

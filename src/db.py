@@ -47,12 +47,22 @@ CREATE TABLE IF NOT EXISTS qa_variant (
 );
 """
 
+SCHEMA_MODERATORS = """
+CREATE TABLE IF NOT EXISTS moderators (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL UNIQUE,
+    name TEXT,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+""" 
+
 SCHEMA_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_qa_question_norm ON qa(question_norm)",
     "CREATE INDEX IF NOT EXISTS idx_unanswered_question_norm ON unanswered(question_norm)",
 
     "CREATE INDEX IF NOT EXISTS idx_variant_qa ON qa_variant(qa_id)",
     "CREATE INDEX IF NOT EXISTS idx_variant_norm ON qa_variant(variant_norm)",
+    "CREATE INDEX IF NOT EXISTS idx_moderators_telegram_id ON moderators(telegram_id)",
 ]
 
 UNIQUE_CONSTRAINTS = [
@@ -72,6 +82,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     cur.execute(SCHEMA_QA)
     cur.execute(SCHEMA_UNANSWERED)
     cur.execute(SCHEMA_VARIANT)
+    cur.execute(SCHEMA_MODERATORS)
     for stmt in SCHEMA_INDEXES:
         cur.execute(stmt)
     for stmt in UNIQUE_CONSTRAINTS:
@@ -227,3 +238,33 @@ def list_unanswered(conn: sqlite3.Connection, only_unhandled: bool = True) -> Li
     else:
         cur.execute("SELECT * FROM unanswered ORDER BY date_asked DESC")
     return cur.fetchall()
+
+
+# -------------------------------
+# Moderators
+# -------------------------------
+
+def add_moderator(conn: sqlite3.Connection, telegram_id: int, name: Optional[str] = None) -> int:
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT OR IGNORE INTO moderators (telegram_id, name)
+        VALUES (?, ?)
+    """, (telegram_id, name))
+    conn.commit()
+    return cur.lastrowid
+
+def remove_moderator(conn: sqlite3.Connection, telegram_id: int) -> bool:
+    cur = conn.cursor()
+    cur.execute("DELETE FROM moderators WHERE telegram_id = ?", (telegram_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+def list_moderators(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM moderators ORDER BY added_at DESC")
+    return cur.fetchall()
+
+def is_moderator(conn: sqlite3.Connection, telegram_id: int) -> bool:
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM moderators WHERE telegram_id = ?", (telegram_id,))
+    return cur.fetchone() is not None

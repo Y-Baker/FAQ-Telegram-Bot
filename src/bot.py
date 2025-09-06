@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# bot.py
 """
 Telegram FAQ Bot — Main runtime with in-memory Q&A cache and matching.
 """
@@ -7,8 +6,8 @@ from __future__ import annotations
 
 import os
 import logging
-import time
-from typing import List, Tuple, Optional, Dict, Any
+from logging.handlers import RotatingFileHandler
+from typing import Optional
 
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
@@ -16,25 +15,32 @@ from telegram.ext import (
     ContextTypes,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
 )
 
 # local modules
 from normalize import normalize_ar
 import db  # centralized DB service (connect, init_db)
-from commands import register_command_handlers, is_admin_private  # admin flows
+from commands import register_command_handlers  # admin flows
 from cache import QACache
+from utils.authorization import Auth
 from match import find_best_match  # returns dict with score, answer, id, ...
 
-from dotenv import load_dotenv
+
+# Max size: 5 MB, keep last 5 backups
+log_handler = RotatingFileHandler(
+    "bot.log",
+    maxBytes=5 * 1024 * 1024,  # 5 MB
+    backupCount=5,
+    encoding="utf-8"
+)
 
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     handlers=[
-        logging.FileHandler("bot.log", encoding="utf-8"),
+        log_handler,
         logging.StreamHandler()
     ],
     force=True,
@@ -45,9 +51,9 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DB_PATH = os.getenv("DB_PATH")
 
-MENTION_THRESHOLD = int(os.getenv("MENTION_THRESHOLD", "70"))
-NORMAL_THRESHOLD = int(os.getenv("NORMAL_THRESHOLD", "80"))
-APOLOGY_MSG = os.getenv("APOLOGY_MSG", "عذراً، لا أملك إجابة على هذا السؤال. يمكنك التواصل مع الدعم.")
+MENTION_THRESHOLD = int(os.getenv("MENTION_THRESHOLD", "90"))
+NORMAL_THRESHOLD = int(os.getenv("NORMAL_THRESHOLD", "95"))
+APOLOGY_MSG = os.getenv("APOLOGY_MSG", r"عذراً، لا أملك إجابة على هذا السؤال. يمكنك التواصل مع الدعم.")
 
 # QA cache configuration
 QA_CACHE_TTL = int(os.getenv("QA_CACHE_TTL", "30"))
@@ -119,7 +125,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # get cache from application bot_data
-    cache: Optional[QACache] = context.application.bot_data.get("qa_cache")
+    cache: Optional[QACache] = context.application.bot_data.get("bot_cache")
     if not cache:
         # fallback: read directly from DB if cache missing (shouldn't happen normally)
         logger.warning("QACache missing from app.bot_data — reading directly from DB.")
@@ -131,7 +137,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             embeddings = []
             for r in q_rows:
                 qas.append({
-                    "id": int(r["id"]),
+                    "qa_id": int(r["id"]),
                     "question": r["question"],
                     "question_norm": r["question_norm"],
                     "embedding": r["embedding"],
@@ -142,6 +148,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 embeddings.append({
                     "qa_id": int(r["qa_id"]),
                     "embedding": r["embedding"],
+                    "question_norm": r["question_norm"],
+                    "category": r["category"] or "",
                 })
 
         finally:
@@ -163,7 +171,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     mentioned = is_mentioned(update, bot_username)
 
     text = remove_mentions(text)
-    best = find_best_match(text, qas)
+    best = find_best_match(text, embeddings)
 
     if not best:
         logger.debug("Matcher returned no best result.")
@@ -180,7 +188,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     score = best.get("score")
     qa_id = best.get("qa_id")
 
-    qa = next((q for q in qas if q["id"] == qa_id), None)
+    qa = next((q for q in qas if q["qa_id"] == qa_id), None)
     if not qa:
         row = db.get_qna_by_id()
         if not row:
@@ -220,7 +228,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "المسؤولون يمكنهم إدارة الأسئلة عبر الرسائل الخاصة."
     )
 
-    if is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+    if not auth.is_private().result():
+        return
+
+    if auth.is_admin().result():
         admin_kb = ReplyKeyboardMarkup(
             [["/admin"]],
             one_time_keyboard=True,
@@ -229,6 +241,27 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "للمشرفين: استخدم /admin لإدارة الأسئلة.",
             reply_markup=admin_kb
+        )
+    elif auth.is_moderator().result():
+        mod_kb = ReplyKeyboardMarkup(
+            [["/moderator"]],
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+        await update.message.reply_text(
+            "للمشرفين: استخدم /moderator لإدارة الأسئلة.",
+            reply_markup=mod_kb
+        )
+    else:
+        user_kb = ReplyKeyboardMarkup(
+            [["/list_qas", "/get_qna"],
+             ["/lookup", "/help"]],
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+        await update.message.reply_text(
+            "يمكنك استخدام الأزرار أدناه لعرض الأسئلة الشائعة أو الحصول على سؤال محدد.",
+            reply_markup=user_kb
         )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -242,7 +275,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command to manage Q&A via private messages."""
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+    if not auth.is_admin().is_private():
         await update.message.reply_text("هذا الأمر متاح فقط للمشرفين عبر الرسائل الخاصة.")
         return
 
@@ -250,6 +284,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             ["/categories", "/list_qas", "/get_qna"],
             ["/add_qna", "/update_qna", "/delete_qna"],
+            ["/list_moderators", "/add_moderators", "/remove_moderators"]
         ],
         one_time_keyboard=True,
         resize_keyboard=True,
@@ -259,6 +294,25 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=admin_kb
     )
 
+async def moderator_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Moderator command to manage Q&A via private messages."""
+    auth = Auth(tel_update=update, tel_context=context)
+    if not auth.is_moderator().is_private():
+        await update.message.reply_text("هذا الأمر متاح فقط للمشرفين عبر الرسائل الخاصة.")
+        return
+
+    mod_kb = ReplyKeyboardMarkup(
+        [
+            ["/categories", "/list_qas", "/get_qna"],
+            ["/add_qna", "/update_qna", "/delete_qna"]
+        ],
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+    await update.message.reply_text(
+        "أهلاً بك في لوحة تحكم المشرفين! اختر أمرًا من الأزرار أدناه:",
+        reply_markup=mod_kb
+    )
 
 def main():
     if not BOT_TOKEN:
@@ -270,7 +324,6 @@ def main():
         db.init_db(conn)
     finally:
         conn.close()
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     cache = QACache(DB_PATH, ttl=QA_CACHE_TTL)
@@ -286,7 +339,7 @@ def main():
         logger.info("QACache auto-refresh enabled (interval=%s s).", QA_CACHE_AUTO_INTERVAL)
 
     # store cache in app.bot_data so handlers & commands can access it
-    app.bot_data["qa_cache"] = cache
+    app.bot_data["bot_cache"] = cache
 
     # Register admin command handlers (they will use db functions and should invalidate cache after mutations)
     register_command_handlers(app)
@@ -295,6 +348,7 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd, filters=filters.TEXT & filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("moderator", moderator_cmd, filters=filters.TEXT & filters.ChatType.PRIVATE))
 
     # Message handler for groups/public/private (non-command messages)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
@@ -302,6 +356,7 @@ def main():
 
     # Start polling
     logger.info("Starting bot …")
+    print("Bot started. Press Ctrl+C to stop.")
     app.run_polling()
 
 

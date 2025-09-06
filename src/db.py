@@ -6,7 +6,7 @@ Telegram FAQ Bot — Centralized Database Service (SQLite)
 from __future__ import annotations
 import sqlite3
 from typing import Any, List, Optional, Tuple, Dict
-from match import embed_text, load_embedding, embed_vector
+from match import embed_text, embed_vector
 from normalize import normalize_ar
 from utils.calc_score import calculate_score
 import numpy as np
@@ -47,12 +47,22 @@ CREATE TABLE IF NOT EXISTS qa_variant (
 );
 """
 
+SCHEMA_MODERATORS = """
+CREATE TABLE IF NOT EXISTS moderators (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL UNIQUE,
+    name TEXT,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+""" 
+
 SCHEMA_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_qa_question_norm ON qa(question_norm)",
     "CREATE INDEX IF NOT EXISTS idx_unanswered_question_norm ON unanswered(question_norm)",
 
     "CREATE INDEX IF NOT EXISTS idx_variant_qa ON qa_variant(qa_id)",
     "CREATE INDEX IF NOT EXISTS idx_variant_norm ON qa_variant(variant_norm)",
+    "CREATE INDEX IF NOT EXISTS idx_moderators_telegram_id ON moderators(telegram_id)",
 ]
 
 UNIQUE_CONSTRAINTS = [
@@ -72,6 +82,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     cur.execute(SCHEMA_QA)
     cur.execute(SCHEMA_UNANSWERED)
     cur.execute(SCHEMA_VARIANT)
+    cur.execute(SCHEMA_MODERATORS)
     for stmt in SCHEMA_INDEXES:
         cur.execute(stmt)
     for stmt in UNIQUE_CONSTRAINTS:
@@ -151,23 +162,6 @@ def search_qna_by_question(conn: sqlite3.Connection, search_term: str) -> List[s
     """, (f"%{search_term}%", f"%{search_term}%"))
     return cur.fetchall()
 
-def semantic_search(conn: sqlite3.Connection, query: str, top_k: int = 1):
-    query_emb = embed_vector(query)
-    if query_emb is None or len(query_emb) == 0:
-        return []
-
-    embeddings = load_all_embeddings(conn)
-    if not embeddings:
-        return []
-
-    scored = []
-    for row in embeddings:
-        score = calculate_score(query_emb, row["embedding"])
-        scored.append((score, row))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[:top_k]
-
 def list_all_qna(conn: sqlite3.Connection, limit: int = 30, offset_id: int = 0) -> List[sqlite3.Row]:
     cur = conn.cursor()
     cur.execute("SELECT * FROM qa WHERE id > ? ORDER BY id ASC LIMIT ?", (offset_id, limit))
@@ -195,18 +189,26 @@ def list_variants_for_qa(conn, qa_id: int):
 
 def load_all_embeddings(conn: sqlite3.Connection) -> List[Dict[str, bytes | str]]:
     cur = conn.cursor()
-    cur.execute("SELECT id AS qa_id, question_norm, embedding FROM qa")
+    cur.execute("SELECT id AS qa_id, question_norm, category, embedding FROM qa WHERE embedding IS NOT NULL")
     res = [{
         "qa_id": row["qa_id"],
-        "norm": row["question_norm"],
-        "embedding": load_embedding(row["embedding"]),
+        "question_norm": row["question_norm"],
+        "embedding": row["embedding"],
+        "category": row["category"],
     } for row in cur.fetchall()]
 
-    cur.execute("SELECT qa_id, variant_norm, embedding FROM qa_variant")
+    cur.execute("""
+        SELECT qa_v.qa_id, qa_v.variant_norm, qa_v.embedding, qa.category 
+        FROM qa_variant AS qa_v
+        INNER JOIN qa ON qa.id = qa_v.qa_id 
+        WHERE qa_v.embedding IS NOT NULL
+    """)
+    
     res.extend([{
         "qa_id": row["qa_id"],
-        "norm": row["variant_norm"],
-        "embedding": load_embedding(row["embedding"]),
+        "question_norm": row["variant_norm"],
+        "embedding": row["embedding"],
+        "category": row["category"],
     } for row in cur.fetchall()])
 
     return res
@@ -236,3 +238,33 @@ def list_unanswered(conn: sqlite3.Connection, only_unhandled: bool = True) -> Li
     else:
         cur.execute("SELECT * FROM unanswered ORDER BY date_asked DESC")
     return cur.fetchall()
+
+
+# -------------------------------
+# Moderators
+# -------------------------------
+
+def add_moderator(conn: sqlite3.Connection, telegram_id: int, name: Optional[str] = None) -> int:
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT OR IGNORE INTO moderators (telegram_id, name)
+        VALUES (?, ?)
+    """, (telegram_id, name))
+    conn.commit()
+    return cur.lastrowid
+
+def remove_moderator(conn: sqlite3.Connection, telegram_id: int) -> bool:
+    cur = conn.cursor()
+    cur.execute("DELETE FROM moderators WHERE telegram_id = ?", (telegram_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+def list_moderators(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM moderators ORDER BY added_at DESC")
+    return cur.fetchall()
+
+def is_moderator(conn: sqlite3.Connection, telegram_id: int) -> bool:
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM moderators WHERE telegram_id = ?", (telegram_id,))
+    return cur.fetchone() is not None

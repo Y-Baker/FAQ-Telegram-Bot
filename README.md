@@ -11,6 +11,18 @@ A simple FAQ bot for Telegram that allows users to quickly search for answers to
 - SQLite database for lightweight storage and Cache for faster fetching.
 - Docker support for easy deployment.
 
+## Best Hyperparameters (for embedding-based search)
+```py
+=== BEST COMBO ===
+{'wc': 0.5, 'wf': 0.5, 'pattern_boost': 0.0, 'exact_bonus': 0.0, 'prefix_bonus': 0.0, 'acc1': 0.7451923076923077, 'mean_top': 81.40794487397142, 'best_thresh': 50, 'best_f1': 0.8539944903581267, 'precision': 0.7451923076923077, 'recall': 1.0}
+
+Top 5 combos:
+{'wc': 0.5, 'wf': 0.5, 'pattern_boost': 0.0, 'exact_bonus': 0.0, 'prefix_bonus': 0.0, 'acc1': 0.7451923076923077, 'mean_top': 81.40794487397142, 'best_thresh': 50, 'best_f1': 0.8539944903581267, 'precision': 0.7451923076923077, 'recall': 1.0}
+{'wc': 0.5, 'wf': 0.5, 'pattern_boost': 0.0, 'exact_bonus': 0.0, 'prefix_bonus': 0.1, 'acc1': 0.7451923076923077, 'mean_top': 81.4166932479911, 'best_thresh': 50, 'best_f1': 0.8539944903581267, 'precision': 0.7451923076923077, 'recall': 1.0}
+{'wc': 0.5, 'wf': 0.5, 'pattern_boost': 0.0, 'exact_bonus': 0.0, 'prefix_bonus': 0.15, 'acc1': 0.7451923076923077, 'mean_top': 81.4166932479911, 'best_thresh': 50, 'best_f1': 0.8539944903581267, 'precision': 0.7451923076923077, 'recall': 1.0}
+{'wc': 0.5, 'wf': 0.5, 'pattern_boost': 0.0, 'exact_bonus': 0.15, 'prefix_bonus': 0.0, 'acc1': 0.7451923076923077, 'mean_top': 81.40794487397142, 'best_thresh': 50, 'best_f1': 0.8539944903581267, 'precision': 0.7451923076923077, 'recall': 1.0}
+{'wc': 0.5, 'wf': 0.5, 'pattern_boost': 0.0, 'exact_bonus': 0.15, 'prefix_bonus': 0.1, 'acc1': 0.7451923076923077, 'mean_top': 81.4166932479911, 'best_thresh': 50, 'best_f1': 0.8539944903581267, 'precision': 0.7451923076923077, 'recall': 1.0}
+```
 ---
 
 ## Installation

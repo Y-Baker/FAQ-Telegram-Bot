@@ -6,7 +6,7 @@ Telegram FAQ Bot — Command Handlers
 import os
 import logging
 import re
-from typing import Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple
 
 from telegram import (
     Update,
@@ -26,10 +26,10 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 from normalize import normalize_ar
+from cache import QACache
 from utils.category import Category
-from utils.load_admins import load_admin_ids
+from utils.authorization import Auth
 import db  # centralized DB service module (connect, add_qna, get_qna_by_id, ...)
-from utils.load_admins import load_admin_ids
 
 _MD_V2_PATTERN = re.compile(r'([_\*\[\]\(\)~`>#+\-=|{}\.!])')
 logger = logging.getLogger(__name__)
@@ -64,27 +64,12 @@ def _format_full_q(row: dict) -> str:
     return f"*\\#Q{row.get('id')}*\n\n*السؤال:*\n{q}\n\n*الإجابة:*\n{a}\n\n*التصنيف:* {cat}"
 
 
-def is_admin_private(update: Update) -> bool:
-    """Return True only if the message is from a configured admin and in private chat."""
-    global ADMIN_IDS
-    if ADMIN_IDS is None:
-        ADMIN_IDS = load_admin_ids()
-
-    if update.effective_user is None or update.effective_chat is None:
-        return False
-    if update.effective_chat.type != "private":
-        return False
-    return update.effective_user.id in ADMIN_IDS
-
-
-# -----------------------
-# Database wrapper helpers (use centralized db module)
-# -----------------------
+_db_path = None
 def _get_db_conn():
-    db_path = os.getenv("DB_PATH")
-    if not db_path:
+    _db_path = os.getenv("DB_PATH")
+    if not _db_path:
         raise EnvironmentError("DB_PATH environment variable is not set")
-    return db.connect(db_path)
+    return db.connect(_db_path)
 
 
 def insert_qna(question: str, answer: str, category: Optional[str]) -> int:
@@ -216,32 +201,184 @@ async def categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -----------------------
-# /list_qas command (admin private only)
+# Admin Controls
 # -----------------------
-async def list_qas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
-        await update.message.reply_text("هذا الأمر متاح للمشرفين فقط.")
+def _load_moderators(cache: Optional[QACache] = None) -> List[Dict]:
+    if not cache:
+        conn = _get_db_conn()
+        moderators = []
+        try:
+            rows = db.list_moderators(conn)
+            for row in rows:
+                moderators.append({
+                    "id": int(row["id"]),
+                    "telegram_id": int(row["telegram_id"]),
+                    "name": row["name"],
+                    "added_at": row["added_at"]
+                })
+            return moderators
+        finally:
+            conn.close()
+    else:
+        return cache.get_moderators()
+
+
+async def list_moderators(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if not auth.is_private().is_admin().result():
+        await update.message.reply_text("🚫 You are not authorized to view moderators.")
         return
 
-    rows = list_qas(limit=30)
+    moderators = _load_moderators()
+
+    if not moderators:
+        await update.message.reply_text("No moderators found.")
+        return
+
+    # Build a pretty list
+    lines = ["👮 Moderators:"]
+    for mod in moderators:
+        lines.append(
+            f"- {mod['name']} "
+            f"(ID: {mod['id']}, TG: {mod['telegram_id']}, Added: {mod['added_at']})"
+        )
+
+    await update.message.reply_text("\n".join(lines))
+
+async def add_moderators(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if not auth.is_private().is_admin().result():
+        await update.message.reply_text("🚫 You are not authorized to add moderators.")
+        return
+    print("$$****** add_moderators called *****")
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /add_moderators <telegram_id1> <telegram_id2> ...")
+        return
+    print(f"$$Arguments received: {args}")
+    telegram_ids = []
+    for arg in args:
+        try:
+            telegram_id = int(arg)
+            telegram_ids.append(telegram_id)
+        except ValueError:
+            await update.message.reply_text(f"Invalid Telegram ID: {arg}. Must be an integer.")
+            if len(telegram_ids) == 0:
+                return
+    print(f"$$Valid Telegram IDs to add: {telegram_ids}")
+    if not telegram_ids:
+        await update.message.reply_text("No valid Telegram IDs provided.")
+        return
+    print("$$Proceeding to add moderators to DB")
+    conn = _get_db_conn()
+    try:
+        added_count = 0
+        for tg_id in telegram_ids:
+            print(f"$$Adding TG ID: {tg_id}")
+            if db.add_moderator(conn, tg_id):
+                added_count += 1
+        conn.commit()
+        print(f"$$Total moderators added: {added_count}")
+        if added_count == 0:
+            await update.message.reply_text("No new moderators were added (they may already exist).")
+            return
+
+        # Invalidate cache if exists
+        bot_cache = context.application.bot_data.get("bot_cache")
+        if bot_cache:
+            bot_cache.force_reload()
+        await update.message.reply_text(f"Successfully added {added_count} moderators.v ✅")
+    except Exception as e:
+        logger.error(f"Error adding moderators: {e}")
+        logging.exception(e)
+        await update.message.reply_text("⚠️ An error occurred while adding moderators.")
+    finally:
+        conn.close()
+
+async def remove_moderators(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if not auth.is_private().is_admin().result():
+        await update.message.reply_text("🚫 You are not authorized to remove moderators.")
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /remove_moderators <telegram_id1> <telegram_id2> ...")
+        return
+
+    telegram_ids = []
+    for arg in args:
+        try:
+            telegram_id = int(arg)
+            telegram_ids.append(telegram_id)
+        except ValueError:
+            await update.message.reply_text(f"Invalid Telegram ID: {arg}. Must be an integer.")
+            if len(telegram_ids) == 0:
+                return
+
+    if not telegram_ids:
+        await update.message.reply_text("No valid Telegram IDs provided.")
+        return
+
+    conn = _get_db_conn()
+    try:
+        removed_count = 0
+        for tg_id in telegram_ids:
+            if db.remove_moderator(conn, tg_id):
+                removed_count += 1
+        conn.commit()
+        if removed_count == 0:
+            await update.message.reply_text("No moderators were removed (they may not exist).")
+            return
+
+        # Invalidate cache if exists
+        bot_cache = context.application.bot_data.get("bot_cache")
+        if bot_cache:
+            bot_cache.force_reload()
+        await update.message.reply_text(f"Successfully removed {removed_count} moderators.")
+    except Exception as e:
+        logger.error(f"Error removing moderators: {e}")
+        logging.exception(e)
+        await update.message.reply_text("⚠️ An error occurred while removing moderators.")
+    finally:
+        conn.close()
+
+# -----------------------
+# /list_qas command
+# -----------------------
+async def list_qas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = list_qas()
     if not rows:
         await update.message.reply_text("لا توجد أسئلة مخزنة حالياً. ℹ️")
         return
 
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if (not auth.is_private().result()):
+        return
+
+    view = False
+    if (auth.is_admin().result() or auth.is_moderator().result()):
+        view = True
+
     for _id, q, cat in rows:
         text = _format_short_q(_id, q, cat)
-        kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("عرض 🔍", callback_data=f"view::{_id}"),
-                    InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
-                    InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
-                ]
+        buttons = [InlineKeyboardButton("عرض 🔍", callback_data=f"view::{_id}")]
+        if view:
+            buttons += [
+                InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
+                InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
             ]
-        )
+        kb = InlineKeyboardMarkup([buttons])
         await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
 
-    await update.message.reply_text("⬆️ هذه أحدث الأسئلة اضغط على *عرض* لرؤية التفاصيل أو استخدم الأزرار للتعديل/الحذف", parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(
+        "⬆️ هذه أحدث الأسئلة اضغط على *عرض* لرؤية التفاصيل أو استخدم الأزرار للتعديل/الحذف",
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
 
 async def view_qna_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data
@@ -261,15 +398,22 @@ async def view_qna_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = {"id": _id, "question": question, "answer": answer, "category": category}
     text = _format_full_q(row)
 
-    kb = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
-                InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
-            ],
-            [InlineKeyboardButton("إغلاق ✖️", callback_data=f"close_view::{_id}")],
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if (not auth.is_private().result()):
+        return
+
+    view = False
+    if (auth.is_admin().result() or auth.is_moderator().result()):
+        view = True
+
+    buttons = [InlineKeyboardButton("إغلاق ✖️", callback_data=f"close_view::{_id}")]
+    if view:
+        buttons += [
+            InlineKeyboardButton("تعديل 📝", callback_data=f"upd_id::{_id}"),
+            InlineKeyboardButton("حذف 🗑️", callback_data=f"del_id::{_id}"),
         ]
-    )
+    kb = InlineKeyboardMarkup([buttons])
 
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
@@ -293,10 +437,6 @@ async def get_qna_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Usage: /get_qna 123
     Fetches QnA with DB id 123 and displays full Q&A.
     """
-    if not is_admin_private(update):
-        await update.message.reply_text("هذا الأمر متاح للمشرفين فقط وفي المحادثة الخاصة.")
-        return
-
     args = context.args or []
     if not args:
         await update.message.reply_text("استخدم: /get_qna <ID> — مثال: /get_qna 12")
@@ -330,7 +470,11 @@ async def get_qna_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /add_qna flow (private admins only)
 # -----------------------
 async def add_qna_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.message.reply_text("يرجى استخدام هذا الأمر في المحادثة الخاصة من قِبل المشرفين فقط.")
         return ConversationHandler.END
     await update.message.reply_text("أرسل السؤال الآن ✍️")
@@ -353,7 +497,11 @@ async def add_qna_receive_answer(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def add_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
     data = update.callback_query.data
@@ -370,9 +518,9 @@ async def add_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     qna_id = insert_qna(question, answer, category_value)
     
     # update the cache after a mutation
-    qa_cache = context.application.bot_data.get("qa_cache")
-    if qa_cache:
-        qa_cache.force_reload()
+    bot_cache = context.application.bot_data.get("bot_cache")
+    if bot_cache:
+        bot_cache.force_reload()
         
     await update.callback_query.edit_message_text(f"تمت الإضافة بنجاح ✅\n**ID: {qna_id}**", parse_mode='Markdown')
     # clear temporary data
@@ -385,7 +533,10 @@ async def add_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 # /update_qna flow (private admins only)
 # -----------------------
 async def update_qna_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.message.reply_text("يرجى استخدام هذا الأمر في المحادثة الخاصة من قِبل المشرفين فقط.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -420,7 +571,10 @@ async def update_qna_receive_id(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def update_qna_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
     data = update.callback_query.data
@@ -464,9 +618,9 @@ async def update_qna_receive_value(update: Update, context: ContextTypes.DEFAULT
     new_value = update.message.text.strip()
     ok = update_qna_field(qna_id, field, new_value)
     if ok:
-        qa_cache = context.application.bot_data.get("qa_cache")
-        if qa_cache:
-            qa_cache.force_reload()
+        bot_cache = context.application.bot_data.get("bot_cache")
+        if bot_cache:
+            bot_cache.force_reload()
         await update.message.reply_text(f"تم التحديث بنجاح ✅", reply_markup=ReplyKeyboardRemove())
     else:
         await update.message.reply_text("لم يتم العثور على العنصر أو لم يحدث تغيير. ❌", reply_markup=ReplyKeyboardRemove())
@@ -476,7 +630,10 @@ async def update_qna_receive_value(update: Update, context: ContextTypes.DEFAULT
 
 
 async def update_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
     try:
@@ -489,9 +646,9 @@ async def update_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_T
     category_value = Category[cat_name].value if cat_name in Category.__members__ else Category.GENERAL.value
     ok = update_qna_field(qna_id, "category", category_value)
     if ok:
-        qa_cache = context.application.bot_data.get("qa_cache")
-        if qa_cache:
-            qa_cache.force_reload()
+        bot_cache = context.application.bot_data.get("bot_cache")
+        if bot_cache:
+            bot_cache.force_reload()
         await update.callback_query.edit_message_text(f"تم التحديث بنجاح ✅")
     else:
         await update.callback_query.edit_message_text("فشل التحديث أو العنصر غير موجود. ❌")
@@ -504,7 +661,10 @@ async def update_qna_category_cb(update: Update, context: ContextTypes.DEFAULT_T
 # /delete_qna flow (private admins only)
 # -----------------------
 async def delete_qna_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.message.reply_text("يرجى استخدام هذا الأمر في المحادثة الخاصة من قِبل المشرفين فقط.")
         return ConversationHandler.END
     await update.message.reply_text("أرسل معرف QnA (رقم) أو جزء من السؤال للبحث:")
@@ -541,7 +701,11 @@ async def delete_qna_receive_id(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def delete_qna_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
     try:
@@ -562,7 +726,11 @@ async def delete_qna_choice_callback(update: Update, context: ContextTypes.DEFAU
 
 
 async def delete_qna_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin_private(update):
+    auth = Auth(tel_update=update, tel_context=context)
+
+    if not auth.is_private().result():
+        await update.callback_query.answer("فقط في المحادثات الخاصة.")
+    if not auth.is_admin().result() and not auth.is_moderator().result():
         await update.callback_query.answer("غير مسموح.")
         return ConversationHandler.END
 
@@ -571,9 +739,9 @@ async def delete_qna_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TY
         qna_id = int(context.user_data.get("del_qna_id"))
         ok = delete_qna_by_id(qna_id)
         if ok:
-            qa_cache = context.application.bot_data.get("qa_cache")
-            if qa_cache:
-                qa_cache.force_reload()
+            bot_cache = context.application.bot_data.get("bot_cache")
+            if bot_cache:
+                bot_cache.force_reload()
             await update.callback_query.edit_message_text("تم الحذف بنجاح ✅")
         else:
             await update.callback_query.edit_message_text("لم يتم العثور على العنصر. ❌")
@@ -594,10 +762,19 @@ def register_command_handlers(application):
         register_command_handlers(app)
     """
 
-    # categories and list (simple commands)
+    # categories
     application.add_handler(CommandHandler("categories", categories_cmd, filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("list_qas", list_qas_cmd))
+
+    # admin controls
+    application.add_handler(CommandHandler("list_moderators", list_moderators, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("add_moderators", add_moderators, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("remove_moderators", remove_moderators, filters=filters.ChatType.PRIVATE))
+
+    # QnA commands
+    application.add_handler(CommandHandler("list_qas", list_qas_cmd, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("get_qna", get_qna_cmd))
+
+    # lookup user info
     application.add_handler(CommandHandler("lookup", lookup_username, filters=filters.TEXT & filters.ChatType.PRIVATE))
 
     # --- ADD QnA conversation handler ---

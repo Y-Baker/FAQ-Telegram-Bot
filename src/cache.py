@@ -15,6 +15,7 @@ class QACache:
         self._last_loaded = 0.0
         self._qas: List[Dict] = []
         self._embeddings: List[Dict] = []
+        self._moderators: List[Dict] = []
         self._stop_event = threading.Event()
         self._auto_thread: Optional[threading.Thread] = None
 
@@ -32,7 +33,7 @@ class QACache:
             qas = []
             for r in rows:
                 qas.append({
-                    "id": int(r["id"]),
+                    "qa_id": int(r["id"]),
                     "question": r["question"],
                     "question_norm": r["question_norm"],
                     "embedding": r["embedding"],
@@ -56,8 +57,30 @@ class QACache:
                 embeddings.append({
                     "qa_id": int(r["qa_id"]),
                     "embedding": r["embedding"],
+                    "question_norm": r["question_norm"],
+                    "category": r["category"] or "",
                 })
             return embeddings
+        finally:
+            conn.close()
+
+    def _load_moderators(self) -> List[Dict]:
+        conn = db.connect(self.db_path)
+        if not conn:
+            logger.error("Failed to connect to database at %s", self.db_path)
+            return []
+        
+        try:
+            rows = db.list_moderators(conn)
+            moderators = []
+            for r in rows:
+                moderators.append({
+                    "id": int(r["id"]),
+                    "telegram_id": int(r["telegram_id"]),
+                    "name": r["name"],
+                    "added_at": r["added_at"],
+                })
+            return moderators
         finally:
             conn.close()
 
@@ -93,6 +116,20 @@ class QACache:
                     logger.exception("QACache: failed to reload embeddings from DB: %s", e)
             return list(self._embeddings)
 
+    def get_moderators(self) -> List[Dict]:
+        """Return the cached moderators list. Reloads if stale."""
+        with self._lock:
+            now = time.time()
+            if not self._moderators or (now - self._last_loaded) > self.ttl:
+                logger.info("QACache: reloading moderators cache (ttl expired or empty).")
+                try:
+                    self._moderators = self._load_moderators()
+                    self._last_loaded = now
+                except Exception as e:
+                    # keep old cache in case of DB error
+                    logger.exception("QACache: failed to reload moderators from DB: %s", e)
+            return list(self._moderators)
+
     def invalidate(self) -> None:
         """Mark cache stale — next get_qas() will reload from DB."""
         with self._lock:
@@ -122,6 +159,7 @@ class QACache:
                 with self._lock:
                     self._qas = self._load_from_db()
                     self._embeddings = self._load_embeddings()
+                    self._moderators = self._load_moderators()
                     self._last_loaded = time.time()
                 logger.debug("QACache: auto-refreshed cache.")
             except Exception:
